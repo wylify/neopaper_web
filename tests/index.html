@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NEOPAPER web tests</title>
+  <style>
+    body { font: 14px/1.4 ui-monospace, Menlo, monospace; background: #0E0E11; color: #ECEBE6; padding: 16px; }
+    .ok { color: #DDFF3D; } .fail { color: #FF8A80; } h1 { font-size: 18px; }
+  </style>
+</head>
+<body>
+  <h1>NEOPAPER web tests</h1>
+  <p id="sum">Running…</p>
+  <pre id="out"></pre>
+  <script src="../vendor/zxing/zxing-reader.js"></script>
+  <script type="module">
+    import { encodeNp1, normalize, collides, NP_KEYS } from '../js/np1.js';
+    import { interpret, parseNp1 } from '../js/parse.js';
+    import { encodeQr, ECC, dataBits } from '../js/qr.js';
+    import { plan } from '../js/capacity.js';
+    import { code128Widths } from '../js/code128.js';
+    import { cardCodes } from '../js/codes.js';
+    import { newCard, toJson, fromJson, templates, payload, unitSize, cloneCard, makeRow } from '../js/model.js';
+    import { suggestInk, suggestBackdrop, contrast, INK_TARGET, toHsv, fromHsv } from '../js/colors.js';
+    import { drawWallpaper, drawCard, microText } from '../js/render.js';
+
+    const ZX = window.ZXingWASM;
+    ZX.prepareZXingModule({ overrides: { locateFile: (p, prefix) => (p.endsWith('.wasm') ? new URL(`../vendor/zxing/${p}`, location.href).href : prefix + p) }, fireImmediately: true });
+
+    const out = document.getElementById('out');
+    let pass = 0, fail = 0;
+    const log = (cls, msg) => { const s = document.createElement('span'); s.className = cls; s.textContent = msg + '\n'; out.append(s); };
+    async function test(name, fn) {
+      try { await fn(); pass++; log('ok', '✓ ' + name); }
+      catch (e) { fail++; log('fail', '✗ ' + name + ' — ' + (e && e.message || e)); console.error(name, e); }
+    }
+    const eq = (a, b, m = '') => { const A = JSON.stringify(a), B = JSON.stringify(b); if (A !== B) throw new Error(`${m} expected ${B}, got ${A}`); };
+    const ok = (c, m = 'assertion failed') => { if (!c) throw new Error(m); };
+    const f = (key, value) => ({ key, value });
+    import { invert } from '../js/scan.js';
+
+    /** Renders a QR matrix to ImageData (4 px modules, 4-module quiet zone) and decodes it. */
+    async function decodeQr(q, scale = 4) {
+      const n = q.size + 8, c = document.createElement('canvas'); c.width = c.height = n * scale;
+      const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.fillStyle = '#000';
+      for (let y = 0; y < q.size; y++) for (let i = 0; i < q.size; i++) if (q.modules[y * q.size + i]) x.fillRect((i + 4) * scale, (y + 4) * scale, scale, scale);
+      const r = await ZX.readBarcodes(x.getImageData(0, 0, c.width, c.height), { formats: ['QRCode'], tryHarder: true });
+      return r[0];
+    }
+    async function decodeBar(text) {
+      const w = code128Widths(text), mod = 3, total = w.reduce((a, b) => a + b, 0);
+      const c = document.createElement('canvas'); c.width = (total + 20) * mod; c.height = 80;
+      const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.fillStyle = '#000';
+      let p = 10;
+      w.forEach((v, i) => { if (i % 2 === 0) x.fillRect(p * mod, 10, v * mod, 60); p += v; });
+      const r = await ZX.readBarcodes(x.getImageData(0, 0, c.width, c.height), { formats: ['Code128'], tryHarder: true });
+      return r[0]?.text;
+    }
+
+    // ── NP1 (ported from Np1Test.kt) ──
+    await test('encodes readable caps with text last', () => {
+      eq(encodeNp1([f('TXT', 'Call me after 18:00!'), f('N', 'Jana Novakova'), f('T', '+421 905 123 456'), f('E', 'jana@novak.sk'),
+        f('W', 'https://www.novak.sk/Shop'), f('IG', '@jana.novak'), f('A', 'Hlavna 12, 81101 Bratislava, SK'), f('X', '')]),
+        'NP1 N:JANA NOVAKOVA T:+421905123456 E:JANA@NOVAK.SK W:NOVAK.SK/Shop IG:JANA.NOVAK A:HLAVNA 12/81101 BRATISLAVA/SK TXT:Call me after 18:00!');
+    });
+    await test('parses back including colons in text', () => {
+      eq(parseNp1('NP1 N:JANA T:+421905 W:A.SK/X:Y TXT:Note: X:not a key'), [['N', 'JANA'], ['T', '+421905'], ['W', 'A.SK/X:Y'], ['TXT', 'Note: X:not a key']]);
+    });
+    await test('profile URL becomes handle', () => eq(normalize('X', 'https://x.com/jananovak'), 'JANANOVAK'));
+    await test('detects collision', () => { ok(collides('N', 'Jana T:2')); ok(!collides('TXT', 'Jana T:2')); ok(!collides('N', 'Jana')); });
+    await test('caps fit more than lowercase', () => {
+      const caps = plan('NP1 TXT:' + 'HELLO WORLD '.repeat(10)), lower = plan('NP1 TXT:' + 'hello world '.repeat(10));
+      ok(caps.freeBits > lower.freeBits); ok(caps.moreCaps > 0);
+    });
+    await test('signal handle vs number, address newlines', () => {
+      eq(normalize('SIG', '@jana.01'), 'JANA.01'); eq(normalize('SIG', '+421 905'), '+421905'); eq(normalize('A', 'A 1\nB 2'), 'A 1/B 2');
+    });
+
+    // ── Scan parsing (ScannerTest.kt) ──
+    await test('vCard becomes contact', () => {
+      const r = interpret('BEGIN:VCARD\nVERSION:3.0\nFN:Your Name\nTEL;TYPE=CELL:+00 000\nEMAIL:hello@yourdomain.com\nORG:Wylify\nEND:VCARD', 'QRCode');
+      eq([r.kind, r.name, r.phones, r.emails, r.org], ['contact', 'Your Name', ['+00 000'], ['hello@yourdomain.com'], 'Wylify']);
+    });
+    await test('bare domain becomes https link', () => { const r = interpret('wylify.github.io/neoscan', 'Code128'); eq([r.kind, r.url, r.format], ['link', 'https://wylify.github.io/neoscan', 'CODE 128']); });
+    await test('sentence stays text', () => eq(interpret('If found, please return.', 'QRCode').kind, 'text'));
+
+    // ── QR encoder round trips through zxing ──
+    await ZX.readBarcodes(new ImageData(8, 8), { formats: ['QRCode'] }).catch(() => {});
+    const samples = [
+      'NP1 N:JANA NOVAKOVA T:+421905123456 E:JANA@NOVAK.SK',
+      'NP1 N:A TXT:' + 'lower case text that costs bytes '.repeat(6),
+      'NP1 TXT:' + 'ALL CAPS TEXT 1234567890 '.repeat(12),
+      'NP1 N:ŽOFIA ČIERNA TXT:Ďakujem! 🎉',
+      'https://yourdomain.com', 'BEGIN:VCARD\nVERSION:3.0\nFN:Your Name\nTEL:+00 000 000 000\nEMAIL:hello@yourdomain.com\nEND:VCARD',
+      '0123456789012345678901234567890123456789', ' ', 'A', 'x'.repeat(600),
+    ];
+    for (const s of samples) {
+      await test(`QR round trip: ${JSON.stringify(s.slice(0, 40))}${s.length > 40 ? '…' : ''}`, async () => {
+        const pl = plan(s);
+        const q = encodeQr(s, { minVersion: pl.version, ecc: pl.ecc, boost: false });
+        ok(q, 'encoder returned null');
+        eq(q.version, pl.version, 'version vs plan');
+        const r = await decodeQr(q);
+        ok(r, 'zxing could not decode');
+        eq(r.text, s, 'decoded text');
+      });
+    }
+    await test('QR every version and ECC level decodes', async () => {
+      for (let v = 1; v <= 40; v += (v < 12 ? 1 : 3)) {
+        for (const e of [ECC.L, ECC.M, ECC.Q, ECC.H]) {
+          const cap = dataBits(v, e);
+          // Fill most of the version with alphanumeric data so this exact version is chosen.
+          const len = Math.floor((cap - 4 - 13 - 8) / 5.5);
+          const text = 'NEOPAPER-'.repeat(Math.ceil(len / 9)).slice(0, len);
+          const q = encodeQr(text, { minVersion: v, ecc: e, boost: false });
+          eq([q.version, q.ecc], [v, e], `V${v}/${e}`);
+          const r = await decodeQr(q, 3);
+          ok(r && r.text === text, `V${v} ECC ${'LMQH'[e]} failed to decode`);
+        }
+      }
+    });
+    await test('known capacities', () => { eq(dataBits(1, ECC.L), 152); eq(dataBits(10, ECC.L), 2192); eq(dataBits(40, ECC.L), 23648); eq(dataBits(40, ECC.H), 10208); });
+
+    // ── Code 128 ──
+    for (const s of ['wylify.github.io/neoscan', 'example.com/reader', '12345678', '123', 'A1234B', 'x99999z', ' ', 'NEOPAPER 2026 / 0001']) {
+      await test(`Code 128 round trip: ${JSON.stringify(s)}`, async () => eq(await decodeBar(s), s));
+    }
+    await test('Code 128 module count for reader link', () => eq(code128Widths('wylify.github.io/neoscan').reduce((a, b) => a + b, 0), 299));
+
+    // ── Model ──
+    await test('JSON round trip keeps every field', () => {
+      for (const [, t] of templates()) { const a = toJson(t), b = toJson(fromJson(JSON.parse(JSON.stringify(a)))); b.qr.fields.forEach((x, i) => (x.id = a.qr.fields[i]?.id)); eq(b, a); }
+    });
+    await test('legacy reader link is migrated, bad values fall back', () => {
+      const c = fromJson({ barcodeLink: 'example.com/reader', barcodeCaption: 'READER APP', ratio: 'nope', rows: [{ kind: 'zzz', h: 999 }], qr: { fields: [{ k: 'BAD' }, { k: 'N', v: 'A' }] } });
+      eq([c.barcodeLink, c.barcodeCaption, c.ratio, c.rows[0].kind, c.rows[0].height, c.qr.fields.length], ['wylify.github.io/neoscan', 'CODE SCANNER', 'R3_4', 'space', 64, 1]);
+    });
+    await test('every ratio keeps the same card area', () => {
+      for (const r of ['R3_4', 'R2_3', 'R9_16', 'R1_1']) { const [w, h] = unitSize(newCard({ ratio: r })); ok(Math.abs(w * h - 120000) < 400, r); }
+      eq(unitSize(newCard()), [300, 400]); eq(unitSize(newCard({ landscape: true })), [400, 300]);
+    });
+    await test('clone gets fresh ids', () => { const a = newCard(), b = cloneCard(a); ok(a.rows[0].id !== b.rows[0].id && a.qr.fields[0].id !== b.qr.fields[0].id); });
+    await test('micro text matches Kotlin hash', () => ok(microText('KK-01').startsWith('KK-01 // ')));
+    await test('default payload is NP1', () => eq(payload(newCard().qr), 'NP1 N:YOUR NAME T:+00000000000 E:HELLO@YOURDOMAIN.COM TXT:If found, please return.'));
+
+    // ── Colours ──
+    await test('ink suggestions clear the target', () => {
+      // Mid-grey is left out: nothing reaches 7:1 against it (the Kotlin version behaves the same).
+      for (const c of [0xFFFF6A13, 0xFFDDFF3D, 0xFF141414, 0xFF2A1B3D].map((x) => x | 0)) suggestInk(c).forEach((s) => ok(contrast(s, c) >= INK_TARGET - 0.01, c.toString(16)));
+      ok(suggestBackdrop(0xFFFF6A13 | 0).length > 0);
+    });
+    await test('HSV round trip', () => { for (const c of [0xFFFF6A13, 0xFF123456, 0xFFFFFFFF, 0xFF000000].map((x) => x | 0)) eq(fromHsv(...toHsv(c)), c); });
+
+    // ── Rendering: a rendered card scans ──
+    await document.fonts.ready;
+    for (const [name, t] of templates()) {
+      await test(`rendered "${name}" wallpaper scans (QR + barcode)`, async () => {
+        const W = 1080, H = 2400, c = document.createElement('canvas'); c.width = W; c.height = H;
+        const x = c.getContext('2d');
+        drawWallpaper(x, t, cardCodes(payload(t.qr), t.barcodeLink), null, W, H);
+        const d = x.getImageData(0, 0, W, H);
+        const r = await ZX.readBarcodes(d, { formats: ['QRCode', 'Code128'], tryHarder: true, maxNumberOfSymbols: 4 });
+        // zxing does not read light-on-dark 1D codes; the scanner retries on an inverted frame.
+        invert(d);
+        const r2 = await ZX.readBarcodes(d, { formats: ['Code128'], tryHarder: true, maxNumberOfSymbols: 2 });
+        const texts = [...r, ...r2].map((z) => z.text);
+        ok(texts.includes(payload(t.qr)), 'QR not found: ' + JSON.stringify(texts));
+        ok(texts.includes(t.barcodeLink), 'barcode not found: ' + JSON.stringify(texts));
+      });
+    }
+
+    document.getElementById('sum').innerHTML = `<b class="${fail ? 'fail' : 'ok'}">${pass} passed, ${fail} failed</b>`;
+    window.__results = { pass, fail };
+  </script>
+</body>
+</html>
