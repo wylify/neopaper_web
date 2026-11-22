@@ -369,8 +369,14 @@ body.modal-open #app { pointer-events: none; }
 .sheet-wrap.open .dialog { transform: translate(-50%, -50%); opacity: 1; }
 .dialog .sheet-body { gap: 12px; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
-.dialog.fullscreen { inset: 0; left: 0; top: 0; width: 100%; height: 100%; max-height: none; padding: calc(var(--safe-t) + 8px) var(--safe-r) calc(var(--safe-b) + 8px) var(--safe-l); background: #000; clip-path: none; transform: none; cursor: zoom-out; }
+.sheet-wrap .dialog.fullscreen, .sheet-wrap.open .dialog.fullscreen { inset: 0; left: 0; top: 0; width: 100%; height: 100%; max-height: none; padding: calc(var(--safe-t) + 8px) var(--safe-r) calc(var(--safe-b) + 8px) var(--safe-l); background: #000; clip-path: none; transform: none; cursor: zoom-out; }
 .dialog.fullscreen .sheet-body { height: 100%; }
+.zoom-box { touch-action: none; overflow: hidden; cursor: zoom-in; }
+.zoom-box.zoomed { cursor: grab; }
+.zoom-box.zoomed:active { cursor: grabbing; }
+.zoom-box canvas { transform-origin: 50% 50%; will-change: transform; }
+.zoom-hint { position: absolute; left: 0; right: 0; bottom: calc(var(--safe-b) + 14px); text-align: center; color: var(--muted); pointer-events: none; transition: opacity .3s; }
+.zoom-box.zoomed .zoom-hint { opacity: 0; }
 .sheet-wrap.black .scrim { background: #000; }
 .menu-item { display: flex; align-items: center; gap: 14px; min-height: 52px; padding: 0 8px; font-size: 16px; }
 .menu-item:hover { background: var(--surface2); }

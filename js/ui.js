@@ -180,6 +180,8 @@ export async function copyText(text) {
  * A <canvas> that repaints with draw(ctx, cssW, cssH) whenever it is resized or invalidated.
  * Repaints are coalesced to one per frame.
  */
+const MAX_ZOOM_PIXELS = 16_000_000; // iOS Safari draws nothing on bigger canvases
+
 export function canvasView(draw, cls = '', label = '') {
   const c = h('canvas', { class: cls, role: label ? 'img' : null, 'aria-label': label || null });
   const ctx = c.getContext('2d');
@@ -187,8 +189,11 @@ export function canvasView(draw, cls = '', label = '') {
   const paint = () => {
     queued = false;
     if (!alive || !w || !hh) return;
-    const dpr = Math.min(3, window.devicePixelRatio || 1);
-    const bw = Math.round(w * dpr), bh = Math.round(hh * dpr);
+    // c.zoom > 1 (set by zoomPan) renders more pixels so a zoomed-in preview stays sharp.
+    const k = Math.min(3, window.devicePixelRatio || 1) * (c.zoom || 1);
+    let bw = Math.round(w * k), bh = Math.round(hh * k);
+    const cap = MAX_ZOOM_PIXELS / (bw * bh);
+    if (cap < 1) { bw = Math.round(bw * Math.sqrt(cap)); bh = Math.round(bh * Math.sqrt(cap)); }
     if (c.width !== bw || c.height !== bh) { c.width = bw; c.height = bh; }
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, bw, bh);
@@ -203,4 +208,95 @@ export function canvasView(draw, cls = '', label = '') {
   ro.observe(c);
   c.dispose = () => { alive = false; ro.disconnect(); };
   return c;
+}
+
+/**
+ * Pinch, wheel or double-tap/click to zoom [target] (a canvasView) inside [box], drag to pan.
+ * The view never pans past the target's edges. A single tap/click at 1× calls onTap
+ * (e.g. close). Once a gesture settles the canvas is redrawn at the zoomed resolution.
+ * Returns { reset, dispose }.
+ */
+export function zoomPan(box, target, { onTap, max = 6 } = {}) {
+  box.classList.add('zoom-box');
+  let s = 1, x = 0, y = 0;
+  const pts = new Map();
+  let start = null, moved = false, lastTap = 0, tapTimer = 0, sharpTimer = 0;
+
+  const clamp = () => {
+    s = Math.min(max, Math.max(1, s));
+    const mx = (target.offsetWidth * (s - 1)) / 2, my = (target.offsetHeight * (s - 1)) / 2;
+    x = Math.min(mx, Math.max(-mx, x)); y = Math.min(my, Math.max(-my, y));
+  };
+  const apply = (animate = false) => {
+    clamp();
+    target.style.transition = animate ? 'transform .25s cubic-bezier(.2,.9,.3,1)' : 'none';
+    target.style.transform = s === 1 ? '' : `translate(${x}px, ${y}px) scale(${s})`;
+    box.classList.toggle('zoomed', s > 1.01);
+    clearTimeout(sharpTimer);
+    sharpTimer = setTimeout(() => { if ((target.zoom || 1) !== s) { target.zoom = s; target.invalidate?.(); } }, 180);
+  };
+  // Zoom to [ns] keeping the content point under (cx, cy) (client coords) in place.
+  const zoomAt = (ns, cx, cy, animate) => {
+    const r = box.getBoundingClientRect();
+    const px = cx - (r.left + r.width / 2), py = cy - (r.top + r.height / 2);
+    ns = Math.min(max, Math.max(1, ns));
+    const f = ns / s;
+    x = px - (px - x) * f; y = py - (py - y) * f; s = ns;
+    apply(animate);
+  };
+  const reset = () => { s = 1; x = 0; y = 0; apply(true); };
+
+  const mid = () => { const [a, b] = [...pts.values()]; return { cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, d: Math.hypot(a.x - b.x, a.y - b.y) }; };
+  const begin = () => {
+    if (pts.size >= 2) { const m = mid(); start = { ...m, s, x, y }; }
+    else if (pts.size === 1) { const [p] = pts.values(); start = { cx: p.x, cy: p.y, s, x, y }; }
+  };
+
+  box.addEventListener('pointerdown', (e) => {
+    try { box.setPointerCapture(e.pointerId); } catch { /* synthetic or already-gone pointer */ }
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size === 1) moved = false;
+    begin();
+  });
+  box.addEventListener('pointermove', (e) => {
+    if (!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (!start) return;
+    if (pts.size >= 2) {
+      const m = mid();
+      moved = true;
+      // Re-derive from the gesture start so the pinch tracks the fingers exactly.
+      s = start.s; x = start.x; y = start.y;
+      zoomAt(start.s * (m.d / (start.d || 1)), start.cx, start.cy, false);
+      x += m.cx - start.cx; y += m.cy - start.cy; apply();
+    } else {
+      const [p] = pts.values();
+      const dx = p.x - start.cx, dy = p.y - start.cy;
+      if (Math.hypot(dx, dy) > 6) moved = true;
+      if (moved && s > 1) { x = start.x + dx; y = start.y + dy; apply(); }
+    }
+  });
+  const end = (e) => {
+    if (!pts.delete(e.pointerId)) return;
+    begin();
+    if (pts.size || moved || e.type === 'pointercancel') return;
+    const now = performance.now();
+    if (now - lastTap < 300) {
+      clearTimeout(tapTimer); lastTap = 0;
+      if (s > 1.01) reset(); else zoomAt(2.5, e.clientX, e.clientY, true);
+    } else {
+      lastTap = now;
+      if (s <= 1.01 && onTap) tapTimer = setTimeout(() => onTap(), 300);
+    }
+  };
+  box.addEventListener('pointerup', end);
+  box.addEventListener('pointercancel', end);
+  box.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    // Trackpad pinch arrives as wheel + ctrlKey with small deltas; a mouse wheel has big steps.
+    const k = Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.002));
+    zoomAt(s * k, e.clientX, e.clientY, false);
+  }, { passive: false });
+
+  return { reset, dispose() { clearTimeout(tapTimer); clearTimeout(sharpTimer); } };
 }

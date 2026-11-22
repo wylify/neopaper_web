@@ -1,5 +1,5 @@
 // Card builder: Card / Style / Backdrop / Export tabs over a live preview (ui/BuilderScreen.kt).
-import { h, icon, I, iconButton, primary, outline, sectionLabel, tag, hint, segmented, chipGroup, switchRow, slider, textField, toast, busy, nextPaint } from './ui.js';
+import { h, icon, I, iconButton, primary, outline, sectionLabel, tag, hint, segmented, chipGroup, switchRow, slider, textField, toast, busy, nextPaint, zoomPan } from './ui.js';
 import { S, draft, edit, subscribe, removeRow, undoRemove, moveRow, setPhotoBlob, flush } from './state.js';
 import {
   RATIOS, ratioLabel, CORNERS, COLOR_PRESETS, BACKGROUND_COLORS, OVERLAYS, PHOTO_EFFECTS, DEVICE, CUSTOM, DEVICE_PRESETS,
@@ -367,10 +367,12 @@ export function builderScreen(nav) {
 
   function fullPreview() {
     const cv = wallpaperCanvas(draft, () => S.photo, () => dev, 'full-wall');
-    const s = openSheet([cv], { label: 'Wallpaper preview', dialog: true, onClose: () => cv.dispose() });
+    const zoomHint = h('p', { class: 'zoom-hint mono-small' }, 'PINCH OR DOUBLE-TAP TO ZOOM · TAP TO CLOSE');
+    let zoom = null;
+    const s = openSheet([cv, zoomHint], { label: 'Wallpaper preview', dialog: true, onClose: () => { zoom?.dispose(); cv.dispose(); } });
     s.el.classList.add('fullscreen');
     s.el.parentElement.classList.add('black');
-    s.el.addEventListener('click', () => s.close());
+    zoom = zoomPan(s.el, cv.canvas, { onTap: () => s.close() });
   }
 
   async function saveImage(wallpaper) {

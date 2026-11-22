@@ -43,6 +43,7 @@ export function wallpaperCanvas(getCfg, getPhoto, getSize, cls = 'wall-canvas') 
   ro.observe(box);
   box.sync = () => { fit(); c.invalidate(); };
   box.invalidate = () => c.invalidate();
+  box.canvas = c;
   box.dispose = () => { ro.disconnect(); c.dispose(); };
   return box;
 }
