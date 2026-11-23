@@ -16,6 +16,11 @@ import { cardPx, WARNING_PATH } from './render.js';
 
 const TABS = ['Card', 'Style', 'Backdrop', 'Export'];
 
+// Preview stage heights (px) the user picks with the handle; card and wallpaper stages keep their own.
+const STAGE_DEFAULT = { card: 236, wall: 300 };
+const STAGE_MIN = 120;
+const stageH = { ...STAGE_DEFAULT };
+
 export function rowTitle(r) {
   if (isField(r.kind)) { const t = (r.label.trim() || ROW_KINDS[r.kind].title).toLowerCase(); return t.charAt(0).toUpperCase() + t.slice(1); }
   return ROW_KINDS[r.kind].title;
@@ -56,7 +61,12 @@ export function builderScreen(nav) {
   const fitEl = h('span', { class: 'stage-note right mono-small' });
   const card = cardCanvas(draft, (info) => { fit = info; paintFit(); }, 'stage-card');
   const wall = wallpaperCanvas(draft, () => S.photo, () => (tab === 3 ? targetSize(draft()) : dev), 'stage-wall');
-  const stage = h('div', { class: 'stage dots builder-stage' }, h('div', { class: 'stage-inner' }, card, wall), liveEl, fitEl);
+  const handle = h('div', {
+    class: 'stage-handle', role: 'separator', tabindex: '0', 'aria-orientation': 'horizontal',
+    'aria-label': 'Resize preview. Drag or use arrow keys, double-click to reset', title: 'Drag to resize · double-click to reset',
+  }, h('i'));
+  const stage = h('div', { class: 'stage dots builder-stage' }, h('div', { class: 'stage-inner' }, card, wall), liveEl, fitEl, handle);
+  wireStageHandle();
 
   const pane = h('div', { class: 'pane', role: 'tabpanel' });
   const actions = h('div', { class: 'action-bar' });
@@ -82,6 +92,8 @@ export function builderScreen(nav) {
     tabBtns.forEach((b, j) => b.setAttribute('aria-selected', String(i === j)));
     tabRow.style.setProperty('--tab', i);
     stage.classList.toggle('wall-mode', i >= 2);
+    handle.hidden = i === 0;
+    applyStageH();
     paneApi?.destroy?.();
     paneApi = [cardTab, styleTab, backdropTab, exportTab][i]();
     pane.replaceChildren(paneApi.el);
@@ -96,6 +108,47 @@ export function builderScreen(nav) {
     if (tab === 0) actions.replaceChildren(outline('Add row', add, { icon: I.plus }), primary('Next: Style', () => setTab(1), { icon: I.next }));
     else if (tab === 3) actions.replaceChildren(outline('Save image', () => saveImage(false), { icon: I.download }), primary('Set as wallpaper', () => saveImage(true), { class: 'wide' }));
     else actions.replaceChildren(outline('Back', () => setTab(tab - 1)), primary(`Next: ${TABS[tab + 1]}`, () => setTab(tab + 1), { class: 'wide' }));
+  }
+
+  // ── Stage resize handle (BuilderScreen.kt StageHandle) ──
+  const stageKey = () => (tab >= 2 ? 'wall' : 'card');
+  const stageMax = () => Math.max(200, Math.round(innerHeight * 0.62));
+  const clampH = (v) => Math.min(stageMax(), Math.max(STAGE_MIN, Math.round(v)));
+  function applyStageH() {
+    stage.style.setProperty('--stage-h', `${clampH(stageH[stageKey()])}px`);
+    handle.setAttribute('aria-valuenow', String(clampH(stageH[stageKey()])));
+  }
+  function wireStageHandle() {
+    let drag = null; // { id, y, h }
+    handle.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      handle.setPointerCapture(e.pointerId);
+      drag = { id: e.pointerId, y: e.clientY, h: clampH(stageH[stageKey()]) };
+      stage.classList.add('resizing');
+      navigator.vibrate?.(8);
+    });
+    handle.addEventListener('pointermove', (e) => {
+      if (!drag || e.pointerId !== drag.id) return;
+      stageH[stageKey()] = clampH(drag.h + e.clientY - drag.y);
+      applyStageH();
+    });
+    const end = (e) => {
+      if (!drag || e.pointerId !== drag.id) return;
+      drag = null;
+      stage.classList.remove('resizing');
+    };
+    handle.addEventListener('pointerup', end);
+    handle.addEventListener('pointercancel', end);
+    handle.addEventListener('dblclick', () => { stageH[stageKey()] = STAGE_DEFAULT[stageKey()]; applyStageH(); });
+    handle.addEventListener('keydown', (e) => {
+      const step = e.key === 'ArrowDown' ? 24 : e.key === 'ArrowUp' ? -24 : 0;
+      if (e.key === 'Home' || e.key === 'Escape') { stageH[stageKey()] = STAGE_DEFAULT[stageKey()]; }
+      else if (step) stageH[stageKey()] = clampH(clampH(stageH[stageKey()]) + step);
+      else return;
+      e.preventDefault();
+      applyStageH();
+    });
   }
 
   function refresh() {
