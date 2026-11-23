@@ -2,6 +2,9 @@
 import { newCard, cloneCard, toJson, fromJson, makeRow, ROW_KINDS } from './model.js';
 import { loadCards, saveCards, putPhoto, deletePhoto, photoIds, persist } from './store.js';
 import { loadPhoto, forgetPhoto } from './photo.js';
+import { settings, defaultLandscape } from './settings.js';
+import { fitBetweenGuides } from './placement.js';
+import { deviceSize } from './export.js';
 
 export const S = { loaded: false, cards: [], draftId: null, homeTab: 0, builderTab: 0, photo: null, saveFailed: false };
 
@@ -76,11 +79,18 @@ export function openCard(id) {
   refreshPhoto();
 }
 
-export function createCard(template) {
+/**
+ * New card from [template], or a blank one in the default shape (Settings). New cards take the
+ * export defaults and start clear of this screen's clock and dock; a [duplicate] stays an exact copy.
+ */
+export function createCard(template, duplicate = false) {
   const n = S.cards.length + 1;
-  const src = template || newCard();
+  const src = template || newCard({ ratio: settings.ratio, landscape: defaultLandscape() });
   const code = src.code === 'KK-01' ? `KK-${String(n).padStart(2, '0')}` : src.code;
-  const card = cloneCard(src, code);
+  const [dw, dh] = deviceSize();
+  const copy = cloneCard(src, code);
+  const card = duplicate ? copy : fitBetweenGuides(
+    { ...copy, exportPreset: settings.exportPreset, exportScale: settings.exportScale, exportPng: settings.exportPng }, dw, dh);
   while (S.cards.some((c) => c.id === card.id)) card.id++;
   S.cards = [card, ...S.cards];
   scheduleSave(0);

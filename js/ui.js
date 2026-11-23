@@ -154,6 +154,14 @@ export function toast(msg, action = null, ms = 3200) {
   toastTimer = setTimeout(() => { t.classList.remove('show'); toastAction = null; }, action ? Math.max(ms, 4500) : ms);
 }
 
+/** Runs the action of the snackbar on screen (Ctrl/⌘+Z for Undo). False when there is none. */
+export function runToastAction() {
+  const a = toastAction;
+  if (!a) return false;
+  toastAction = null; $('toast').classList.remove('show'); a.run();
+  return true;
+}
+
 export function busy(text) {
   const b = $('busy');
   if (text == null) { b.classList.remove('show'); setTimeout(() => { if (!b.classList.contains('show')) b.hidden = true; }, 200); return; }

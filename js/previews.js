@@ -3,6 +3,7 @@ import { canvasView, h } from './ui.js';
 import { unitSize, payload, ROW_KINDS, rowHeight, css } from './model.js';
 import { cardCodes } from './codes.js';
 import { drawCard, drawWallpaper, drawRow } from './render.js';
+import { cardOverlaps } from './placement.js';
 
 const codesFor = (cfg) => cardCodes(payload(cfg.qr), cfg.barcodeLink);
 
@@ -23,25 +24,40 @@ export function cardCanvas(getCfg, onInfo, cls = 'card-canvas') {
 
 /**
  * Wallpaper preview: exactly what the export will contain, at the largest size of the target
- * aspect ratio (getSize() → [w, h]) that fits its box. Returns the box, with sync/invalidate/dispose.
+ * aspect ratio (getSize() → [w, h]) that fits its box. With opts.guides() true, the clock and
+ * dock areas are marked on top; a band turns orange when the card runs into it.
+ * Returns the box, with sync/invalidate/dispose.
  */
-export function wallpaperCanvas(getCfg, getPhoto, getSize, cls = 'wall-canvas') {
+export function wallpaperCanvas(getCfg, getPhoto, getSize, cls = 'wall-canvas', opts = {}) {
   const c = canvasView((ctx, w, h) => {
     const cfg = getCfg();
     if (cfg) drawWallpaper(ctx, cfg, codesFor(cfg), getPhoto(), w, h);
   }, cls, 'Wallpaper preview');
-  const box = h('div', { class: 'wall-fit' }, c);
+  const clock = h('i', { class: 'g-band g-clock' }, h('span', {}, 'CLOCK'));
+  const dock = h('i', { class: 'g-band g-dock' }, h('span', {}, 'DOCK'));
+  const guides = h('div', { class: 'guides', 'aria-hidden': 'true', hidden: true }, clock, dock);
+  const frame = h('div', { class: 'wall-frame' }, c, guides);
+  const box = h('div', { class: 'wall-fit' }, frame);
   let bw = 0, bh = 0;
   const fit = () => {
     if (!bw || !bh) return;
     const [w, hh] = getSize();
     const s = Math.min(bw / w, bh / hh);
-    c.style.width = `${Math.floor(w * s)}px`; c.style.height = `${Math.floor(hh * s)}px`;
+    frame.style.width = `${Math.floor(w * s)}px`; frame.style.height = `${Math.floor(hh * s)}px`;
     c.classList.toggle('landscape', w > hh);
+  };
+  const paintGuides = () => {
+    const on = !!opts.guides?.();
+    guides.hidden = !on;
+    const cfg = getCfg();
+    if (!on || !cfg) return;
+    const [w, hh] = getSize();
+    const o = cardOverlaps(cfg, w, hh);
+    clock.classList.toggle('hit', o.clock); dock.classList.toggle('hit', o.dock);
   };
   const ro = new ResizeObserver(([e]) => { bw = e.contentRect.width; bh = e.contentRect.height; fit(); });
   ro.observe(box);
-  box.sync = () => { fit(); c.invalidate(); };
+  box.sync = () => { fit(); paintGuides(); c.invalidate(); };
   box.invalidate = () => c.invalidate();
   box.canvas = c;
   box.dispose = () => { ro.disconnect(); c.dispose(); };

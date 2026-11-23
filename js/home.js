@@ -1,7 +1,9 @@
 // Home: saved cards, templates and settings (ui/HomeScreen.kt), plus backup and install on the web.
-import { h, icon, I, outline, primary, sectionLabel, tag, toast } from './ui.js';
+import { vibrate, settings, setSettings, ORIENTATIONS, screenIsSmallSquarish } from './settings.js';
+import { h, icon, I, outline, primary, sectionLabel, tag, toast, segmented, switchRow } from './ui.js';
 import { S, subscribe, createCard, deleteCard, undoDelete, flush } from './state.js';
-import { templates, ratioLabel, css, toJson, fromJson, cloneCard } from './model.js';
+import { templates, ratioLabel, css, toJson, fromJson, cloneCard, RATIOS, DEVICE, DEVICE_PRESETS } from './model.js';
+import { deviceSize } from './export.js';
 import { cardCanvas } from './previews.js';
 import { openSheet } from './sheet.js';
 import { getPhoto, putPhoto, isPersisted, persist } from './store.js';
@@ -62,7 +64,7 @@ export function homeScreen(nav) {
       tile.addEventListener('click', open);
       tile.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
       tile.addEventListener('contextmenu', (e) => { e.preventDefault(); cardMenu(card); });
-      longPress(tile, () => { navigator.vibrate?.(20); cardMenu(card); });
+      longPress(tile, () => { vibrate(20); cardMenu(card); });
       grid.append(tile);
     }
     grid.append(h('button', { type: 'button', class: 'tile tile-ghost', onclick: () => setTab(1) },
@@ -74,7 +76,7 @@ export function homeScreen(nav) {
   function cardMenu(card) {
     const s = openSheet([
       h('h2', { class: 'sheet-title' }, card.code.trim() || 'Untitled'),
-      h('button', { type: 'button', class: 'menu-item', onclick: async () => { await s.close(); const c = createCard(card); nav.openCard(c.id); } }, icon(I.copy, { size: 20 }), 'Duplicate'),
+      h('button', { type: 'button', class: 'menu-item', onclick: async () => { await s.close(); const c = createCard(card, true); nav.openCard(c.id); } }, icon(I.copy, { size: 20 }), 'Duplicate'),
       h('button', { type: 'button', class: 'menu-item danger', onclick: async () => {
         await s.close(); deleteCard(card.id);
         toast('Card deleted', { label: 'Undo', run: undoDelete });
@@ -115,10 +117,35 @@ export function homeScreen(nav) {
       : isIos ? h('div', { class: 'panel-box' }, h('p', { class: 'title' }, 'Install on iPhone or iPad'),
         h('ol', { class: 'steps' }, h('li', {}, 'Tap the Share button in Safari.'), h('li', {}, 'Choose “Add to Home Screen”.'), h('li', {}, 'Tap Add.'))) : null;
 
+    // New cards: shape and orientation.
+    const orientNote = h('p', { class: 'body muted' });
+    const paintOrient = () => {
+      orientNote.textContent = (settings.orientation === 'AUTO'
+        ? `Landscape on small, squarish screens, portrait elsewhere. This screen: ${screenIsSmallSquarish() ? 'landscape' : 'portrait'}.`
+        : settings.orientation === 'PORTRAIT' ? 'New cards start upright.' : 'New cards start on their side.') + ' Templates keep their own shape.';
+    };
+    paintOrient();
+    const shape = segmented(Object.keys(RATIOS), settings.ratio, ratioLabel, (v) => setSettings({ ratio: v }));
+    const orient = segmented(Object.keys(ORIENTATIONS), settings.orientation, (v) => ORIENTATIONS[v], (v) => { setSettings({ orientation: v }); paintOrient(); });
+    // Saved image defaults for new cards.
+    const [dw, dh] = deviceSize();
+    const presets = [{ id: DEVICE, name: 'This device', w: dw, h: dh }, ...DEVICE_PRESETS];
+    const list = h('div', { class: 'radio-list', role: 'radiogroup', 'aria-label': 'Image size for new cards' }, presets.map((p) => h('button', {
+      type: 'button', role: 'radio', class: 'radio-item', 'aria-checked': String(settings.exportPreset === p.id),
+      onclick: () => { setSettings({ exportPreset: p.id }); list.querySelectorAll('.radio-item').forEach((b, i) => b.setAttribute('aria-checked', String(presets[i].id === p.id))); },
+    }, h('i', { class: 'radio-dot' }), h('span', { class: 'grow title' }, p.name), h('span', { class: 'mono-small' }, `${p.w} × ${p.h}`))));
+    const scale = segmented([1, 2, 3], settings.exportScale, (v) => `${v}×`, (v) => setSettings({ exportScale: v }));
+    const fmt = segmented([true, false], settings.exportPng, (v) => (v ? 'PNG' : 'JPG'), (v) => setSettings({ exportPng: v }));
+
     return h('div', { class: 'settings' },
-      sectionLabel('About'),
-      h('div', { class: 'panel-box' }, h('p', { class: 'title' }, `NEOPAPER web ${APP_VERSION}`),
-        h('p', { class: 'body muted' }, 'Device-label wallpapers with your contact QR and a reader-app barcode. Everything stays on this device: nothing is uploaded.')),
+      sectionLabel('New cards'),
+      h('p', { class: 'title' }, 'Shape'), shape, orient, orientNote,
+      sectionLabel('Saved image · new cards'),
+      list, h('div', { class: 'row' }, scale, fmt),
+      h('p', { class: 'body muted' }, 'Each card can still change these on its Export tab.'),
+      sectionLabel('Editing'),
+      switchRow('Clock and dock guides', 'Show where the system draws over the wallpaper preview', settings.showGuides, (v) => setSettings({ showGuides: v })),
+      switchRow('Haptics', 'Vibrate when dragging, reordering and scanning (where the browser supports it)', settings.haptics, (v) => setSettings({ haptics: v })),
       installBlock,
       sectionLabel('Storage'),
       h('div', { class: 'panel-box' }, persistLine, persistBtn,
@@ -128,6 +155,9 @@ export function homeScreen(nav) {
       h('a', { class: 'panel-box link-box', href: READER_URL, target: '_blank', rel: 'noopener' },
         h('span', { class: 'grow' }, h('span', { class: 'title' }, 'NEOSCAN'), h('span', { class: 'body muted' }, 'The scanner your card’s barcode points to. Anyone can open it to read your QR.')),
         icon(I.external, { size: 20, color: 'var(--muted)' })),
+      sectionLabel('About'),
+      h('div', { class: 'panel-box' }, h('p', { class: 'title' }, `NEOPAPER web ${APP_VERSION}`),
+        h('p', { class: 'body muted' }, 'Device-label wallpapers with your contact QR and a reader-app barcode. Everything stays on this device: nothing is uploaded.')),
       sectionLabel('Open source'),
       h('div', { class: 'panel-box' },
         h('p', { class: 'body' }, 'Space Grotesk, JetBrains Mono — SIL Open Font License 1.1'),
@@ -137,7 +167,11 @@ export function homeScreen(nav) {
 
   const unsub = subscribe((k) => { if (k === 'cards' && S.homeTab === 0) render(); });
   render();
-  return { el, destroy() { unsub(); disposeThumbs(); }, refresh: render };
+  return {
+    el, destroy() { unsub(); disposeThumbs(); }, refresh: render,
+    /** Ctrl/⌘ + N: new card. */
+    shortcut(key) { if (key === 'n') { nav.openNew(); return true; } return false; },
+  };
 }
 
 /** Press and hold on touch screens; a small move cancels it. */

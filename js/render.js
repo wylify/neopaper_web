@@ -1,6 +1,7 @@
 // Card and wallpaper drawing on Canvas 2D: a port of NEOPAPER's render/CardRenderer.kt and
 // render/WallpaperRenderer.kt. Layout happens in card units (a 3:4 card is 300×400) and is scaled
 // once, so previews, thumbnails and a 4K export are the same design.
+import { cardPlacement } from './placement.js';
 import { FIELD_ICONS, SYMBOLS, ROW_KINDS, rowHeight, unitSize, css } from './model.js';
 import { luminance } from './colors.js';
 
@@ -439,10 +440,10 @@ export function drawWallpaper(ctx, cfg, codes, photo, W, H) {
 
   // ── Card ──
   const [cw, ch] = unitSize(cfg);
-  let cardW = short * cfg.cardSize;
-  if (cardW * ch / cw > H * 0.92) cardW = H * 0.92 * cw / ch; // never taller than the screen
+  const place = cardPlacement(cfg, W, H); // shared with the clock/dock guides
+  const cardW = place.width;
   const k = cardW / cw, cardH = ch * k;
-  const cx = W / 2, cy = H / 2 + cfg.nudge * H;
+  const cx = place.cx, cy = place.cy;
   const tlx = cx - cardW / 2, tly = cy - cardH / 2;
 
   ctx.save();
@@ -467,9 +468,4 @@ export function drawWallpaper(ctx, cfg, codes, photo, W, H) {
 }
 
 /** Card size in output px for an export, as the readout in the Export tab shows it. */
-export function cardPx(cfg, W, H) {
-  const [uw, uh] = unitSize(cfg);
-  let c = Math.min(W, H) * cfg.cardSize;
-  if (c * uh / uw > H * 0.92) c = H * 0.92 * uw / uh;
-  return c;
-}
+export function cardPx(cfg, W, H) { return cardPlacement(cfg, W, H).width; }

@@ -1,4 +1,5 @@
 // Code scanner screen (ui/ScannerScreen.kt), using the same zxing-wasm decoder as NEOSCAN.
+import { vibrate } from './settings.js';
 import { interpret, KEYS, display, action, titleCase, toVcard, hasContact } from './parse.js';
 import { h, icon, I, iconButton, toast, copyText } from './ui.js';
 import { openSheet } from './sheet.js';
@@ -176,7 +177,7 @@ export function scannerScreen(onClose) {
   }
 
   function found(hits) {
-    navigator.vibrate?.(40);
+    vibrate(40);
     finder.classList.add('locked');
     want = false; stop(); // release the camera while the result is open
     sheet = openSheet([...hits.map((r) => resultBlock(interpret(r.text, r.format))),

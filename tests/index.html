@@ -24,6 +24,7 @@
     import { newCard, toJson, fromJson, templates, payload, unitSize, cloneCard, makeRow } from '../js/model.js';
     import { suggestInk, suggestBackdrop, contrast, INK_TARGET, toHsv, fromHsv } from '../js/colors.js';
     import { drawWallpaper, drawCard, microText } from '../js/render.js';
+    import { cardOverlaps, cardPlacement, fitBetweenGuides, isSmallSquarish } from '../js/placement.js';
 
     const ZX = window.ZXingWASM;
     ZX.prepareZXingModule({ overrides: { locateFile: (p, prefix) => (p.endsWith('.wasm') ? new URL(`../vendor/zxing/${p}`, location.href).href : prefix + p) }, fireImmediately: true });
@@ -139,6 +140,26 @@
     await test('every ratio keeps the same card area', () => {
       for (const r of ['R3_4', 'R2_3', 'R9_16', 'R1_1']) { const [w, h] = unitSize(newCard({ ratio: r })); ok(Math.abs(w * h - 120000) < 400, r); }
       eq(unitSize(newCard()), [300, 400]); eq(unitSize(newCard({ landscape: true })), [400, 300]);
+    });
+    // Same cases as the Android app's PlacementTest.
+    await test('default card on a 9:10 screen covers clock and dock', () => eq(cardOverlaps(newCard(), 1080, 1200), { clock: true, dock: true }));
+    await test('default card on a tall phone is clear', () => eq(cardOverlaps(newCard(), 1080, 2400), { clock: false, dock: false }));
+    await test('landscape card fits a 9:10 screen', () => eq(cardOverlaps(newCard({ landscape: true }), 1080, 1200), { clock: false, dock: false }));
+    await test('fit leaves a card that already fits alone', () => { const c = newCard({ nudge: 0.05 }); ok(fitBetweenGuides(c, 1080, 2400) === c); });
+    await test('fit shrinks and centres between the guides', () => {
+      const f = fitBetweenGuides(newCard(), 1080, 1200);
+      eq(cardOverlaps(f, 1080, 1200), { clock: false, dock: false }); ok(f.cardSize < 0.74);
+    });
+    await test('fit only moves when the size is fine', () => {
+      const c = newCard({ cardSize: 0.5, nudge: -0.25 }), f = fitBetweenGuides(c, 1080, 2400);
+      eq(f.cardSize, 0.5); ok(f.nudge > c.nudge); eq(cardOverlaps(f, 1080, 2400), { clock: false, dock: false });
+    });
+    await test('tilt counts towards the height', () => {
+      ok(cardPlacement(newCard({ tilt: 8 }), 1080, 2400).boundsH > cardPlacement(newCard(), 1080, 2400).boundsH);
+      eq(cardOverlaps(fitBetweenGuides(newCard({ tilt: 8 }), 1080, 1200), 1080, 1200), { clock: false, dock: false });
+    });
+    await test('small squarish screens', () => {
+      ok(isSmallSquarish(520, 578)); ok(isSmallSquarish(443, 492)); ok(!isSmallSquarish(412, 915)); ok(!isSmallSquarish(790, 820));
     });
     await test('clone gets fresh ids', () => { const a = newCard(), b = cloneCard(a); ok(a.rows[0].id !== b.rows[0].id && a.qr.fields[0].id !== b.qr.fields[0].id); });
     await test('micro text matches Kotlin hash', () => ok(microText('KK-01').startsWith('KK-01 // ')));

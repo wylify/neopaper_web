@@ -1,6 +1,6 @@
 // NEOPAPER web: entry point. Screens stack like the Android app (Home → Builder → editors),
 // mirrored in browser history so back gestures and buttons work everywhere.
-import { $, h, toast } from './ui.js';
+import { $, h, toast, runToastAction } from './ui.js';
 import { S, init, openCard, createCard, flush, subscribe, setEditingCheck } from './state.js';
 import { initHistory, pushLayer, pop, popTo, depth } from './nav.js';
 import { resetTextCache } from './render.js';
@@ -87,6 +87,20 @@ function withDraft(api) {
   api.destroy = () => { unsub(); d?.(); };
   return api;
 }
+
+// ── Keyboard shortcuts (MainActivity.dispatchKeyEvent) ──────────────────────────────────
+// Ctrl or ⌘: Z undoes a removal while its Undo snackbar is up, N makes a new card on Home,
+// 1–4 switch builder tabs, S saves the image. Text fields keep their own keys (and Ctrl+Z).
+// Escape is handled by nav.js. Browsers keep Ctrl+N for a new window outside an installed app.
+addEventListener('keydown', (e) => {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.defaultPrevented) return;
+  const t = e.target;
+  if (t instanceof HTMLElement && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) && t.type !== 'range') return;
+  if (document.querySelector('.sheet-wrap.open')) return; // a sheet or dialog is open
+  const key = e.key.toLowerCase();
+  const top = screens[screens.length - 1]?.api;
+  if (key === 'z' ? runToastAction() : top?.shortcut?.(key)) e.preventDefault();
+});
 
 // ── Start ──────────────────────────────────────────────────────────────────────────────
 

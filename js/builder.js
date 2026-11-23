@@ -1,4 +1,6 @@
 // Card builder: Card / Style / Backdrop / Export tabs over a live preview (ui/BuilderScreen.kt).
+import { vibrate, settings, setSettings } from './settings.js';
+import { cardOverlaps, overlapsAny, fitBetweenGuides } from './placement.js';
 import { h, icon, I, iconButton, primary, outline, sectionLabel, tag, hint, segmented, chipGroup, switchRow, slider, textField, toast, busy, nextPaint, zoomPan } from './ui.js';
 import { S, draft, edit, subscribe, removeRow, undoRemove, moveRow, setPhotoBlob, flush } from './state.js';
 import {
@@ -17,9 +19,11 @@ import { cardPx, WARNING_PATH } from './render.js';
 const TABS = ['Card', 'Style', 'Backdrop', 'Export'];
 
 // Preview stage heights (px) the user picks with the handle; card and wallpaper stages keep their own.
-const STAGE_DEFAULT = { card: 236, wall: 300 };
+// Defaults scale with the window so short screens keep room for the controls; tall phones still
+// get the full 236 / 300px.
 const STAGE_MIN = 120;
-const stageH = { ...STAGE_DEFAULT };
+const stageDefault = (key) => Math.round(Math.min(key === 'wall' ? 300 : 236, Math.max(STAGE_MIN, innerHeight * (key === 'wall' ? 0.34 : 0.3))));
+const stageH = { card: null, wall: null };
 
 export function rowTitle(r) {
   if (isField(r.kind)) { const t = (r.label.trim() || ROW_KINDS[r.kind].title).toLowerCase(); return t.charAt(0).toUpperCase() + t.slice(1); }
@@ -60,12 +64,25 @@ export function builderScreen(nav) {
   const liveEl = h('span', { class: 'stage-note left mono-small' });
   const fitEl = h('span', { class: 'stage-note right mono-small' });
   const card = cardCanvas(draft, (info) => { fit = info; paintFit(); }, 'stage-card');
-  const wall = wallpaperCanvas(draft, () => S.photo, () => (tab === 3 ? targetSize(draft()) : dev), 'stage-wall');
+  const wall = wallpaperCanvas(draft, () => S.photo, () => (tab === 3 ? targetSize(draft()) : dev), 'stage-wall', { guides: () => settings.showGuides && tab >= 2 });
+  // Backdrop: the card runs under this screen's clock or dock. Tap to fit it between them.
+  const placeText = h('span', {});
+  const placeBadge = h('button', { type: 'button', class: 'place-badge', hidden: true, onclick: () => fitToScreen() },
+    icon(I.warning, { size: 14, stroke: 2.6 }), placeText);
+  const fitToScreen = () => edit((x) => fitBetweenGuides(x, dev[0], dev[1]));
+  // Short screens: the tab bar can fold away; back, preview and the toggle then float on the stage.
+  const modeEl = h('p', { class: 'stage-mode mono-label' });
+  const toggleBtn = h('button', { type: 'button', class: 'stage-btn stage-toggle', onclick: () => toggleTabs() });
+  const stageCtl = h('div', { class: 'stage-ctl' },
+    h('button', { type: 'button', class: 'stage-btn stage-back', 'aria-label': 'Back to your cards', title: 'Back to your cards', onclick: () => nav.back() }, icon(I.back, { size: 22 })),
+    modeEl,
+    h('button', { type: 'button', class: 'stage-btn stage-eye', 'aria-label': 'Preview wallpaper full screen', title: 'Preview wallpaper full screen', onclick: () => fullPreview() }, icon(I.eye, { size: 22 })),
+    toggleBtn);
   const handle = h('div', {
     class: 'stage-handle', role: 'separator', tabindex: '0', 'aria-orientation': 'horizontal',
     'aria-label': 'Resize preview. Drag or use arrow keys, double-click to reset', title: 'Drag to resize · double-click to reset',
   }, h('i'));
-  const stage = h('div', { class: 'stage dots builder-stage' }, h('div', { class: 'stage-inner' }, card, wall), liveEl, fitEl, handle);
+  const stage = h('div', { class: 'stage dots builder-stage' }, h('div', { class: 'stage-inner' }, card, wall), liveEl, fitEl, placeBadge, stageCtl, handle);
   wireStageHandle();
 
   const pane = h('div', { class: 'pane', role: 'tabpanel' });
@@ -78,6 +95,15 @@ export function builderScreen(nav) {
     tabRow,
     h('div', { class: 'builder-body' }, stage, h('div', { class: 'builder-side' }, pane, actions)));
 
+  function toggleTabs() { setSettings({ tabsHidden: !settings.tabsHidden }); paintTabsHidden(); }
+  function paintTabsHidden() {
+    const hidden = settings.tabsHidden;
+    el.classList.toggle('tabs-hidden', hidden);
+    toggleBtn.replaceChildren(icon(hidden ? I.down : I.up, { size: 22 }));
+    toggleBtn.setAttribute('aria-label', hidden ? 'Show tabs' : 'Hide tabs');
+    toggleBtn.title = hidden ? 'Show tabs' : 'Hide tabs';
+  }
+
   function paintFit() {
     if (!fit.total) { fitEl.textContent = ''; return; }
     const all = fit.shown === fit.total;
@@ -89,6 +115,7 @@ export function builderScreen(nav) {
   function setTab(i) {
     const dir = i > tab ? 1 : -1;
     tab = i; S.builderTab = i;
+    modeEl.textContent = TABS[i].toUpperCase();
     tabBtns.forEach((b, j) => b.setAttribute('aria-selected', String(i === j)));
     tabRow.style.setProperty('--tab', i);
     stage.classList.toggle('wall-mode', i >= 2);
@@ -113,7 +140,7 @@ export function builderScreen(nav) {
   // ── Stage resize handle (BuilderScreen.kt StageHandle) ──
   const stageKey = () => (tab >= 2 ? 'wall' : 'card');
   const stageMax = () => Math.max(200, Math.round(innerHeight * 0.62));
-  const clampH = (v) => Math.min(stageMax(), Math.max(STAGE_MIN, Math.round(v)));
+  const clampH = (v) => Math.min(stageMax(), Math.max(STAGE_MIN, Math.round(v ?? stageDefault(stageKey()))));
   function applyStageH() {
     stage.style.setProperty('--stage-h', `${clampH(stageH[stageKey()])}px`);
     handle.setAttribute('aria-valuenow', String(clampH(stageH[stageKey()])));
@@ -126,7 +153,7 @@ export function builderScreen(nav) {
       handle.setPointerCapture(e.pointerId);
       drag = { id: e.pointerId, y: e.clientY, h: clampH(stageH[stageKey()]) };
       stage.classList.add('resizing');
-      navigator.vibrate?.(8);
+      vibrate(8);
     });
     handle.addEventListener('pointermove', (e) => {
       if (!drag || e.pointerId !== drag.id) return;
@@ -140,10 +167,10 @@ export function builderScreen(nav) {
     };
     handle.addEventListener('pointerup', end);
     handle.addEventListener('pointercancel', end);
-    handle.addEventListener('dblclick', () => { stageH[stageKey()] = STAGE_DEFAULT[stageKey()]; applyStageH(); });
+    handle.addEventListener('dblclick', () => { stageH[stageKey()] = null; applyStageH(); });
     handle.addEventListener('keydown', (e) => {
       const step = e.key === 'ArrowDown' ? 24 : e.key === 'ArrowUp' ? -24 : 0;
-      if (e.key === 'Home' || e.key === 'Escape') { stageH[stageKey()] = STAGE_DEFAULT[stageKey()]; }
+      if (e.key === 'Home' || e.key === 'Escape') { stageH[stageKey()] = null; }
       else if (step) stageH[stageKey()] = clampH(clampH(stageH[stageKey()]) + step);
       else return;
       e.preventDefault();
@@ -157,6 +184,10 @@ export function builderScreen(nav) {
     titleEl.textContent = c.code.trim() || 'Untitled';
     liveEl.textContent = tab < 2 ? `LIVE · ${ratioLabel(c.ratio)}` : tab === 3 ? `${targetSize(c).join(' × ')}` : 'THIS DEVICE';
     if (tab < 2) { card.sync(); fitEl.hidden = false; } else { wall.sync(); fitEl.hidden = true; }
+    const o = cardOverlaps(c, dev[0], dev[1]);
+    placeBadge.hidden = tab !== 2 || !overlapsAny(o);
+    placeText.textContent = `${o.clock && o.dock ? 'CLOCK + DOCK' : o.clock ? 'UNDER CLOCK' : 'UNDER DOCK'} · FIT`;
+    placeBadge.setAttribute('aria-label', `Card overlaps the ${o.clock && o.dock ? 'clock and dock' : o.clock ? 'clock' : 'dock'}. Fit it`);
     paneApi?.update?.(c);
   }
 
@@ -201,7 +232,7 @@ export function builderScreen(nav) {
           e.preventDefault();
           drag = { id: r.id, startY: e.clientY, shift: 0, pointerId: e.pointerId };
           body.setPointerCapture(e.pointerId);
-          navigator.vibrate?.(15);
+          vibrate(15);
           applyDrag(0);
         });
       }
@@ -222,7 +253,7 @@ export function builderScreen(nav) {
       if (from >= 0 && to !== from) {
         moveRow(from, to); // re-renders the list; the drag continues on the new element
         drag.shift += (to - from) * ITEM; dy -= (to - from) * ITEM;
-        navigator.vibrate?.(5);
+        vibrate(5);
       }
       applyDrag(dy);
     });
@@ -338,6 +369,9 @@ export function builderScreen(nav) {
     const nudge = slider('Nudge', c.nudge, -0.25, 0.25, 0.01, (v) => `${Math.round(v * 100)}%`, (v) => edit((x) => ({ ...x, nudge: Math.abs(v) < 0.01 ? 0 : v })));
     const tilt = slider('Tilt', c.tilt, -8, 8, 1, (v) => `${Math.round(v)}°`, (v) => edit((x) => ({ ...x, tilt: Math.round(v) })));
     const crop = switchRow('Crop marks', 'Brackets around the card on the background', c.cropMarks, (v) => edit((x) => ({ ...x, cropMarks: v })));
+    const warnText = h('span', { class: 'grow' });
+    const warn = h('div', { class: 'place-warn', hidden: true }, icon(I.warning, { size: 16, stroke: 2.6, color: 'var(--orange)' }), warnText,
+      h('button', { type: 'button', class: 'text-btn lime', 'aria-label': 'Fit between clock and dock', onclick: () => fitToScreen() }, 'Fit'));
 
     function pickBg() {
       const x = draft();
@@ -345,7 +379,7 @@ export function builderScreen(nav) {
     }
 
     const el = h('div', { class: 'stack' }, mode, colorBox, photoBox, sectionLabel('Overlay', 'mt'), overlays,
-      sectionLabel('Placement', 'mt'), size, nudge, tilt, crop);
+      sectionLabel('Placement', 'mt'), warn, size, nudge, tilt, crop);
 
     let thumbFor = null;
     function update(x) {
@@ -355,6 +389,10 @@ export function builderScreen(nav) {
       well.set(x.bgColor);
       sugg.update(suggestBackdrop(x.labelColor), x.bgColor, x.labelColor);
       overlays.querySelectorAll('.overlay-tile').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.o === x.overlay)));
+      size.set(x.cardSize); nudge.set(x.nudge); tilt.set(x.tilt);
+      const o = cardOverlaps(x, dev[0], dev[1]);
+      warn.hidden = !overlapsAny(o);
+      warnText.textContent = o.clock && o.dock ? 'Covers the clock and runs under the dock' : o.clock ? 'Covers the clock on this screen' : 'Runs under the dock on this screen';
       const p = S.photo;
       if (p && thumbFor !== p) {
         thumbFor = p;
@@ -385,12 +423,12 @@ export function builderScreen(nav) {
     const custom = h('div', { class: 'row' }, num('Width px', 'customW'), num('Height px', 'customH'));
     const scale = segmented([1, 2, 3], c.exportScale, (v) => `${v}×`, (v) => edit((x) => ({ ...x, exportScale: v })));
     const fmt = segmented([true, false], c.exportPng, (v) => (v ? 'PNG' : 'JPG'), (v) => edit((x) => ({ ...x, exportPng: v })));
-    const out = h('span', { class: 'mono-small' }), cardOut = h('span', { class: 'mono-small' }), bar = h('span', { class: 'mono-small' });
+    const out = h('span', { class: 'mono-small' }), cardOut = h('span', { class: 'mono-small' }), bar = h('span', { class: 'mono-small' }), place = h('span', { class: 'mono-small' });
     const capNote = h('p', { class: 'note', hidden: true });
     const line = (k, v) => h('div', { class: 'readout-line' }, h('span', { class: 'mono-small muted grow' }, k), v);
     const el = h('div', { class: 'stack' }, sectionLabel('Size'), list, custom,
       sectionLabel('Quality · saved image', 'mt'), h('div', { class: 'row' }, scale, fmt),
-      h('div', { class: 'panel-box' }, line('OUTPUT', out), line('CARD', cardOut), line('BARCODE BAR', bar), capNote,
+      h('div', { class: 'panel-box' }, line('OUTPUT', out), line('CARD', cardOut), line('CLOCK · DOCK', place), line('BARCODE BAR', bar), capNote,
         h('p', { class: 'note' }, 'Browsers can’t change the wallpaper themselves: “Set as wallpaper” saves the image and shows the steps for this device.')));
 
     function update(x) {
@@ -407,6 +445,9 @@ export function builderScreen(nav) {
       const ok = modulePx >= 2;
       bar.textContent = `≈ ${modulePx.toFixed(1)} PX · ${ok ? 'SCANNABLE' : 'SHORTEN THE LINK'}`;
       bar.classList.toggle('lime', ok); bar.classList.toggle('orange', !ok);
+      const ov = cardOverlaps(x, o.w, o.h);
+      place.textContent = !overlapsAny(ov) ? 'CLEAR' : ov.clock && ov.dock ? 'UNDER BOTH' : ov.clock ? 'UNDER CLOCK' : 'UNDER DOCK';
+      place.classList.toggle('lime', !overlapsAny(ov)); place.classList.toggle('orange', overlapsAny(ov));
       capNote.hidden = !o.capped;
       capNote.textContent = `Scaled down to ${(MAX_PIXELS / 1e6).toFixed(0)} MP, the most this browser can draw in one image.`;
     }
@@ -466,10 +507,17 @@ export function builderScreen(nav) {
   const isAndroid = () => /android/i.test(navigator.userAgent);
 
   const unsub = subscribe((k) => { if (k === 'draft' || k === 'photo') refresh(); });
+  paintTabsHidden();
   setTab(tab);
   return {
     el,
     refresh,
+    /** Ctrl/⌘ + 1–4 switch tabs, S saves the image. */
+    shortcut(key) {
+      if (key >= '1' && key <= '4') { setTab(+key - 1); return true; }
+      if (key === 's') { saveImage(false); return true; }
+      return false;
+    },
     destroy() { unsub(); paneApi?.destroy?.(); card.dispose(); wall.dispose(); },
   };
 }
