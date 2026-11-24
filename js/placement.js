@@ -2,12 +2,18 @@
 import { unitSize } from './model.js';
 
 /**
- * Screen areas the system usually draws over, as fractions of the screen height: status bar,
- * clock and At a Glance at the top; dock, search bar and gesture bar at the bottom. Approximate,
- * launchers differ: these are guides, not rules.
+ * Where the system draws over the wallpaper on each screen, as fractions of the screen height.
+ * Approximate, Pixel-style; other launchers and lock screens differ a little, so these are guides,
+ * not rules.
+ *
+ * HOME: status bar and At a Glance at the top; dock, search bar and gesture bar at the bottom.
+ * LOCK: the large clock and At a Glance at the top; shortcuts and the fingerprint area at the bottom.
  */
-export const CLOCK_END = 0.22;
-export const DOCK_START = 0.84;
+export const GUIDE_SCREENS = {
+  HOME: { id: 'HOME', title: 'Home screen', short: 'HOME', clockEnd: 0.16, dockStart: 0.84, top: 'clock', bottom: 'dock' },
+  LOCK: { id: 'LOCK', title: 'Lock screen', short: 'LOCK', clockEnd: 0.32, dockStart: 0.86, top: 'clock', bottom: 'shortcuts' },
+};
+export const guideScreen = (s) => GUIDE_SCREENS[s?.id ?? s] || GUIDE_SCREENS.HOME;
 
 export const CARD_SIZE_RANGE = [0.3, 0.95];
 export const NUDGE_RANGE = [-0.25, 0.25];
@@ -25,22 +31,35 @@ export function cardPlacement(cfg, W, H) {
   return { cx: W / 2, cy, width, height, boundsH, top: cy - boundsH / 2, bottom: cy + boundsH / 2 };
 }
 
-/** { clock, dock }: which system areas the card runs into on a W×H screen. */
-export function cardOverlaps(cfg, W, H) {
+/** { clock, dock }: which system areas of [screen] ('HOME' | 'LOCK') the card runs into on a W×H screen. */
+export function cardOverlaps(cfg, W, H, screen = 'HOME') {
   if (!(W > 0 && H > 0)) return { clock: false, dock: false };
+  const g = guideScreen(screen);
   const p = cardPlacement(cfg, W, H);
-  return { clock: p.top < CLOCK_END * H, dock: p.bottom > DOCK_START * H };
+  return { clock: p.top < g.clockEnd * H, dock: p.bottom > g.dockStart * H };
 }
 export const overlapsAny = (o) => o.clock || o.dock;
 
+/** Wording for an overlap on [screen]: badge "UNDER CLOCK", spoken "clock and dock", a sentence for the warning. */
+export function overlapText(o, screen = 'HOME') {
+  const g = guideScreen(screen), t = g.top.toUpperCase(), b = g.bottom.toUpperCase(), where = g.title.toLowerCase();
+  return {
+    badge: o.clock && o.dock ? `${t} + ${b}` : o.clock ? `UNDER ${t}` : `UNDER ${b}`,
+    spoken: o.clock && o.dock ? `${g.top} and ${g.bottom}` : o.clock ? g.top : g.bottom,
+    sentence: o.clock && o.dock ? `Covers the ${g.top} and runs under the ${g.bottom} on the ${where}`
+      : o.clock ? `Covers the ${g.top} on the ${where}` : `Runs under the ${g.bottom} on the ${where}`,
+  };
+}
+
 /**
- * Smallest change that puts the card between the clock and the dock: shrinks it only if it is
+ * Smallest change that puts the card between [screen]'s clock and dock: shrinks it only if it is
  * taller than the gap, then moves it just far enough. Returns cfg itself when it already fits.
  */
-export function fitBetweenGuides(cfg, W, H) {
-  if (!overlapsAny(cardOverlaps(cfg, W, H))) return cfg;
+export function fitBetweenGuides(cfg, W, H, screen = 'HOME') {
+  if (!overlapsAny(cardOverlaps(cfg, W, H, screen))) return cfg;
+  const g = guideScreen(screen);
   const margin = 0.01 * H;
-  const top = CLOCK_END * H + margin, bottom = DOCK_START * H - margin, gap = bottom - top;
+  const top = g.clockEnd * H + margin, bottom = g.dockStart * H - margin, gap = bottom - top;
   const p = cardPlacement(cfg, W, H);
   let cardSize = cfg.cardSize;
   if (p.boundsH > gap) cardSize = clamp((p.width / Math.min(W, H)) * gap / p.boundsH, CARD_SIZE_RANGE);

@@ -23,7 +23,7 @@
     import { cardCodes } from '../js/codes.js';
     import { newCard, toJson, fromJson, templates, payload, unitSize, cloneCard, makeRow } from '../js/model.js';
     import { suggestInk, suggestBackdrop, contrast, INK_TARGET, toHsv, fromHsv } from '../js/colors.js';
-    import { drawWallpaper, drawCard, microText } from '../js/render.js';
+    import { drawWallpaper, drawCard, microText, cardGeometry, hitTarget, targetRect } from '../js/render.js';
     import { cardOverlaps, cardPlacement, fitBetweenGuides, isSmallSquarish } from '../js/placement.js';
 
     const ZX = window.ZXingWASM;
@@ -157,6 +157,36 @@
     await test('tilt counts towards the height', () => {
       ok(cardPlacement(newCard({ tilt: 8 }), 1080, 2400).boundsH > cardPlacement(newCard(), 1080, 2400).boundsH);
       eq(cardOverlaps(fitBetweenGuides(newCard({ tilt: 8 }), 1080, 1200), 1080, 1200), { clock: false, dock: false });
+    });
+    await test('lock screen clock reaches further down', () => {
+      // Sits just below the home screen's At a Glance but under the lock screen's large clock.
+      const c = newCard({ cardSize: 0.5, nudge: -0.18 });
+      eq(cardOverlaps(c, 1080, 2400, 'HOME'), { clock: false, dock: false });
+      eq(cardOverlaps(c, 1080, 2400, 'LOCK'), { clock: true, dock: false });
+      eq(cardOverlaps(fitBetweenGuides(c, 1080, 2400, 'LOCK'), 1080, 2400, 'LOCK'), { clock: false, dock: false });
+    });
+    // ── Card geometry (shared by drawing, hit-testing and the on-card editor) ──
+    await test('geometry rows match what drawCard draws', () => {
+      for (const [, t] of templates()) {
+        const g = cardGeometry(t), ctx = document.createElement('canvas').getContext('2d');
+        const info = drawCard(ctx, t, cardCodes(payload(t.qr), t.barcodeLink), 0, 0, 300);
+        eq([g.rowsShown, g.rows.length], [info.shown, info.total]);
+      }
+    });
+    await test('taps land on the part drawn there', () => {
+      const c = newCard(), g = cardGeometry(c);
+      const centre = (r) => [r.x + r.w / 2, r.y + r.h / 2];
+      eq(hitTarget(g, ...centre(g.qrRect)), 'qr');
+      eq(hitTarget(g, ...centre(g.code)), 'header');
+      eq(hitTarget(g, ...centre(g.footer)), 'footer');
+      for (const s of g.rows.filter((x) => x.fits)) eq(hitTarget(g, 150, s.top + s.height / 2), s.row.id);
+      ok(targetRect(g, 'footer').y > targetRect(g, g.rows[0].row.id).y);
+    });
+    await test('rows past the free space are not hit and have no rect', () => {
+      const c = newCard({ rows: Array.from({ length: 14 }, () => makeRow('owner')) }), g = cardGeometry(c);
+      const off = g.rows.filter((s) => !s.fits);
+      ok(off.length > 0 && g.rows.slice(g.rowsShown).every((s) => !s.fits));
+      for (const s of off) { ok(targetRect(g, s.row.id) === null); ok(hitTarget(g, 150, s.top + 2) !== s.row.id); }
     });
     await test('small squarish screens', () => {
       ok(isSmallSquarish(520, 578)); ok(isSmallSquarish(443, 492)); ok(!isSmallSquarish(412, 915)); ok(!isSmallSquarish(790, 820));

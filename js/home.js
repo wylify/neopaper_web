@@ -1,5 +1,6 @@
 // Home: saved cards, templates and settings (ui/HomeScreen.kt), plus backup and install on the web.
-import { vibrate, settings, setSettings, ORIENTATIONS, screenIsSmallSquarish } from './settings.js';
+import { vibrate, settings, setSettings, ORIENTATIONS, CARD_EDITORS, screenIsSmallSquarish, guides, setGuides } from './settings.js';
+import { pushLayer, pop, isTop } from './nav.js';
 import { h, icon, I, outline, primary, sectionLabel, tag, toast, segmented, switchRow } from './ui.js';
 import { S, subscribe, createCard, deleteCard, undoDelete, flush } from './state.js';
 import { templates, ratioLabel, css, toJson, fromJson, cloneCard, RATIOS, DEVICE, DEVICE_PRESETS } from './model.js';
@@ -33,11 +34,18 @@ export function homeScreen(nav) {
   let thumbs = [];
   function disposeThumbs() { thumbs.forEach((c) => c.dispose()); thumbs = []; }
 
+  // Back (gesture, button or Escape) on Templates or Settings goes to Your cards first; from
+  // Cards it leaves the app. One history entry stands for "not on Cards".
+  let tabLayer = null;
   function setTab(i) {
-    S.homeTab = i;
-    tabs.forEach((t, j) => t.setAttribute('aria-current', String(i === j)));
-    render();
-    content.scrollTop = 0;
+    if (S.homeTab !== i) {
+      S.homeTab = i;
+      tabs.forEach((t, j) => t.setAttribute('aria-current', String(i === j)));
+      render();
+      content.scrollTop = 0;
+    }
+    if (i !== 0 && !tabLayer) tabLayer = pushLayer(() => { tabLayer = null; if (S.homeTab !== 0) setTab(0); }, 'home-tab');
+    else if (i === 0 && tabLayer && isTop(tabLayer)) pop();
   }
 
   function render() {
@@ -144,7 +152,12 @@ export function homeScreen(nav) {
       list, h('div', { class: 'row' }, scale, fmt),
       h('p', { class: 'body muted' }, 'Each card can still change these on its Export tab.'),
       sectionLabel('Editing'),
-      switchRow('Clock and dock guides', 'Show where the system draws over the wallpaper preview', settings.showGuides, (v) => setSettings({ showGuides: v })),
+      h('p', { class: 'title' }, 'Card tab'),
+      segmented(Object.keys(CARD_EDITORS), settings.cardEditor, (v) => CARD_EDITORS[v], (v) => setSettings({ cardEditor: v })),
+      h('p', { class: 'body muted' }, 'On the card: tap a part of the card to edit it, tap a text again to type on it. Row list: every row in a list with drag to sort, easier with a screen reader. Also switchable on the Card tab.'),
+      h('p', { class: 'title' }, 'Clock and dock guides'),
+      guidesPicker(),
+      h('p', { class: 'body muted' }, 'Mark where the home screen (status bar, At a Glance, dock) or the lock screen (large clock, shortcuts) draws over the wallpaper preview. Off by default; also on the card’s Backdrop tab.'),
       switchRow('Haptics', 'Vibrate when dragging, reordering and scanning (where the browser supports it)', settings.haptics, (v) => setSettings({ haptics: v })),
       installBlock,
       sectionLabel('Storage'),
@@ -169,9 +182,16 @@ export function homeScreen(nav) {
   render();
   return {
     el, destroy() { unsub(); disposeThumbs(); }, refresh: render,
+    /** History entries Home itself holds (Templates/Settings), which opening a card keeps. */
+    baseDepth: () => (tabLayer ? 1 : 0),
     /** Ctrl/⌘ + N: new card. */
     shortcut(key) { if (key === 'n') { nav.openNew(); return true; } return false; },
   };
+}
+
+/** Guides off, or following the home or lock screen. Used in Settings and on the Backdrop tab. */
+export function guidesPicker() {
+  return segmented([null, 'HOME', 'LOCK'], guides(), (v) => (v == null ? 'Off' : v === 'HOME' ? 'Home' : 'Lock'), setGuides);
 }
 
 /** Press and hold on touch screens; a small move cancels it. */

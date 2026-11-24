@@ -20,9 +20,14 @@ export function initHistory() {
 
 /** Adds a layer; [close] runs when it is popped by back, Escape or [pop]. */
 export function pushLayer(close, kind = 'overlay') {
-  layers.push({ close, kind });
+  const layer = { close, kind };
+  layers.push(layer);
   history.pushState({ np: layers.length }, '');
+  return layer;
 }
+
+/** [layer] (from pushLayer) is the top one, so pop() would close it. */
+export const isTop = (layer) => layers[layers.length - 1] === layer;
 
 /** Pops the top layer (like pressing back). Resolves once it is closed. */
 export function pop() {
@@ -46,7 +51,8 @@ addEventListener('keydown', (e) => {
   if (e.key !== 'Escape' || !layers.length) return;
   const t = e.target;
   // Escape inside a text field first leaves the field.
-  if (t instanceof HTMLElement && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') && document.activeElement === t && layers[layers.length - 1].kind === 'screen') { t.blur(); return; }
+  // (In a sheet, Escape closes the sheet.)
+  if (t instanceof HTMLElement && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') && document.activeElement === t && layers[layers.length - 1].kind !== 'overlay') { t.blur(); return; }
   e.preventDefault();
   pop();
 });

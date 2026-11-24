@@ -33,6 +33,9 @@ export const I = {
   scan: 'M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5M4 12h16', torch: 'M9 2h6v5l-2 3v12h-2V10L9 7zM9 7h6',
   share: 'M12 15V3M7 8l5-5 5 5M5 13v8h14v-8', up: 'M12 19V5M6 11l6-6 6 6', down: 'M12 5v14M6 13l6 6 6-6',
   upload: 'M12 20V9M7 14l5-5 5 5M5 4h14', external: 'M14 4h6v6M20 4l-9 9M18 14v6H4V6h6',
+  undo: 'M9 14 4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3', redo: 'M15 14l5-5-5-5M20 9H10a6 6 0 0 0 0 12h3', reorder: 'M8 20V4M4 8l4-4 4 4M16 4v16M12 16l4 4 4-4',
+  barHide: 'M4 5h16M7 17l5-5 5 5', barShow: 'M4 5h16M7 12l5 5 5-5', prev: 'M6 15l6-6 6 6', nextField: 'M6 9l6 6 6-6',
+  list: 'M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01', tapCard: 'M6 3h12v18H6zM9 8h6M9 12h3', qr: 'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h2v2h-2zM18 18h2v2h-2zM14 18h2M18 14h2',
 };
 
 const NS = 'http://www.w3.org/2000/svg';

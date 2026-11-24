@@ -1,13 +1,15 @@
 // NEOPAPER web: entry point. Screens stack like the Android app (Home → Builder → editors),
 // mirrored in browser history so back gestures and buttons work everywhere.
 import { $, h, toast, runToastAction } from './ui.js';
-import { S, init, openCard, createCard, flush, subscribe, setEditingCheck } from './state.js';
+import { S, init, openCard, createCard, flush, subscribe, setEditingCheck, select } from './state.js';
+import { ROW_KINDS } from './model.js';
 import { initHistory, pushLayer, pop, popTo, depth } from './nav.js';
 import { resetTextCache } from './render.js';
 import { homeScreen } from './home.js';
 import { builderScreen } from './builder.js';
 import { addRowSheet, rowEditorScreen, codesScreen } from './editors.js';
 import { scannerScreen } from './scan.js';
+import { reorderScreen } from './cardedit.js';
 
 const root = $('app');
 const screens = []; // { api, name }
@@ -63,7 +65,7 @@ function focusScreen(el) {
 const nav = {
   back: () => pop(),
   async openCard(id) {
-    await popTo(0);
+    await popTo(screens[0]?.api.baseDepth?.() ?? 0);
     openCard(id);
     remember(id);
     mount('builder', () => builderScreen(nav));
@@ -73,10 +75,16 @@ const nav = {
     await nav.openCard(c.id);
   },
   openScanner: () => mount('scanner', () => scannerScreen(() => nav.back())),
-  openCodes: () => mount('codes', () => withDraft(codesScreen(nav))),
+  /** part 'TOP' (header & QR) or 'BOTTOM' (barcode); focusQr scrolls to the QR. */
+  openCodes: (part = 'TOP', focusQr = false) => mount('codes', () => withDraft(codesScreen(nav, part, focusQr))),
   openRowEditor: (id, header) => mount('row', () => rowEditorScreen(id, header, nav)),
-  openAddRow(header) {
-    addRowSheet(header, (kind, row) => { if (kind === 'custom') nav.openRowEditor(row.id, false); });
+  openReorder: (onAddRow) => mount('reorder', () => withDraft(reorderScreen(nav, onAddRow))),
+  /** [after]: body row id to insert below. A new body row (or info row) is selected on the card. */
+  openAddRow(header, after = null) {
+    addRowSheet(header, (kind, row, inHeader) => {
+      if (!inHeader || !ROW_KINDS[kind].filler) select(row.id);
+      if (kind === 'custom') nav.openRowEditor(row.id, false);
+    }, after);
   },
 };
 
@@ -89,17 +97,20 @@ function withDraft(api) {
 }
 
 // ── Keyboard shortcuts (MainActivity.dispatchKeyEvent) ──────────────────────────────────
-// Ctrl or ⌘: Z undoes a removal while its Undo snackbar is up, N makes a new card on Home,
+// Ctrl or ⌘: Z undoes (a removal while its Undo snackbar is up, else the builder's last step),
+// Shift+Z or Y redoes, N makes a new card on Home,
 // 1–4 switch builder tabs, S saves the image. Text fields keep their own keys (and Ctrl+Z).
 // Escape is handled by nav.js. Browsers keep Ctrl+N for a new window outside an installed app.
 addEventListener('keydown', (e) => {
-  if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.defaultPrevented) return;
+  if (!(e.ctrlKey || e.metaKey) || e.altKey || e.defaultPrevented) return;
+  const key = e.key.toLowerCase();
+  if (e.shiftKey && key !== 'z') return;
   const t = e.target;
   if (t instanceof HTMLElement && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) && t.type !== 'range') return;
   if (document.querySelector('.sheet-wrap.open')) return; // a sheet or dialog is open
-  const key = e.key.toLowerCase();
   const top = screens[screens.length - 1]?.api;
-  if (key === 'z' ? runToastAction() : top?.shortcut?.(key)) e.preventDefault();
+  const z = key === 'z' && !e.shiftKey;
+  if ((z && runToastAction()) || top?.shortcut?.(e.shiftKey ? 'Z' : key)) e.preventDefault();
 });
 
 // ── Start ──────────────────────────────────────────────────────────────────────────────

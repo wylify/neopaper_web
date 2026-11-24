@@ -3,7 +3,7 @@ import { canvasView, h } from './ui.js';
 import { unitSize, payload, ROW_KINDS, rowHeight, css } from './model.js';
 import { cardCodes } from './codes.js';
 import { drawCard, drawWallpaper, drawRow } from './render.js';
-import { cardOverlaps } from './placement.js';
+import { cardOverlaps, guideScreen } from './placement.js';
 
 const codesFor = (cfg) => cardCodes(payload(cfg.qr), cfg.barcodeLink);
 
@@ -24,8 +24,9 @@ export function cardCanvas(getCfg, onInfo, cls = 'card-canvas') {
 
 /**
  * Wallpaper preview: exactly what the export will contain, at the largest size of the target
- * aspect ratio (getSize() → [w, h]) that fits its box. With opts.guides() true, the clock and
- * dock areas are marked on top; a band turns orange when the card runs into it.
+ * aspect ratio (getSize() → [w, h]) that fits its box. While opts.guides() names a screen
+ * ('HOME' | 'LOCK'), its clock and dock areas are marked on top; a band turns orange when the
+ * card runs into it.
  * Returns the box, with sync/invalidate/dispose.
  */
 export function wallpaperCanvas(getCfg, getPhoto, getSize, cls = 'wall-canvas', opts = {}) {
@@ -33,8 +34,10 @@ export function wallpaperCanvas(getCfg, getPhoto, getSize, cls = 'wall-canvas', 
     const cfg = getCfg();
     if (cfg) drawWallpaper(ctx, cfg, codesFor(cfg), getPhoto(), w, h);
   }, cls, 'Wallpaper preview');
-  const clock = h('i', { class: 'g-band g-clock' }, h('span', {}, 'CLOCK'));
-  const dock = h('i', { class: 'g-band g-dock' }, h('span', {}, 'DOCK'));
+  const clockLabel = h('span', {}), dockLabel = h('span', {});
+  const clock = h('i', { class: 'g-band g-clock' }, clockLabel);
+  const dock = h('i', { class: 'g-band g-dock' }, dockLabel);
+  let shownFor = null;
   const guides = h('div', { class: 'guides', 'aria-hidden': 'true', hidden: true }, clock, dock);
   const frame = h('div', { class: 'wall-frame' }, c, guides);
   const box = h('div', { class: 'wall-fit' }, frame);
@@ -47,12 +50,18 @@ export function wallpaperCanvas(getCfg, getPhoto, getSize, cls = 'wall-canvas', 
     c.classList.toggle('landscape', w > hh);
   };
   const paintGuides = () => {
-    const on = !!opts.guides?.();
-    guides.hidden = !on;
+    const screen = opts.guides?.() || null;
+    guides.hidden = !screen;
     const cfg = getCfg();
-    if (!on || !cfg) return;
+    if (!screen || !cfg) return;
+    if (shownFor !== screen) {
+      shownFor = screen;
+      const g = guideScreen(screen);
+      clock.style.height = `${g.clockEnd * 100}%`; dock.style.top = `${g.dockStart * 100}%`;
+      clockLabel.textContent = `${g.short} · ${g.top.toUpperCase()}`; dockLabel.textContent = `${g.short} · ${g.bottom.toUpperCase()}`;
+    }
     const [w, hh] = getSize();
-    const o = cardOverlaps(cfg, w, hh);
+    const o = cardOverlaps(cfg, w, hh, screen);
     clock.classList.toggle('hit', o.clock); dock.classList.toggle('hit', o.dock);
   };
   const ro = new ResizeObserver(([e]) => { bw = e.contentRect.width; bh = e.contentRect.height; fit(); });

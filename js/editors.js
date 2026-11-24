@@ -2,13 +2,13 @@
 import { h, icon, I, iconButton, primary, outline, sectionLabel, segmented, chip, chipGroup, slider, textField, toast } from './ui.js';
 import { draft, edit, addRow, updateRow, removeRow, undoRemove, findRow } from './state.js';
 import {
-  ROW_KINDS, INFO_KINDS, FILLER_KINDS, FIELD_ICONS, SYMBOLS, SUB_GRAPHICS, SUB_WIDTH, SUB_REPEAT, QR_TYPES, NP_KEYS, NP_GROUPS,
+  ROW_KINDS, INFO_KINDS, FILLER_KINDS, FIELD_ICONS, SYMBOLS, SUB_GRAPHICS, SUB_WIDTH, SUB_REPEAT, QR_TYPES, NP_KEYS, NP_GROUPS, READER_LINK, READER_CAPTION,
   isField, isPattern, rowHeight, makeRow, npField, payload, css,
 } from './model.js';
 import { normalize, collides, encodeNp1 } from './np1.js';
 import { bits, RECOMMENDED_VERSION, MAX_VERSION, ECC_NAME } from './capacity.js';
 import { cardCodes } from './codes.js';
-import { drawCard } from './render.js';
+import { drawCard, cardGeometry } from './render.js';
 import { canvasView } from './ui.js';
 import { openSheet } from './sheet.js';
 import { rowPreview, rowSwatch } from './previews.js';
@@ -16,13 +16,14 @@ import { rowIconPath } from './builder.js';
 
 // ═══ Add a row ═══════════════════════════════════════════════════════════════════════════
 
-export function addRowSheet(initialHeader, onPicked) {
+/** [after]: body row id the new row goes right below (null: at the end). */
+export function addRowSheet(initialHeader, onPicked, after = null) {
   const cfg = draft();
   let header = initialHeader, filter = initialHeader ? 2 : 0;
   const content = h('div', { class: 'stack' });
   let s;
   const pick = async (kind, inHeader) => {
-    const row = addRow(kind, inHeader);
+    const row = addRow(kind, inHeader, inHeader ? null : after);
     await s.close();
     onPicked(kind, row, inHeader);
   };
@@ -115,15 +116,33 @@ export function rowEditorScreen(rowId, header, nav) {
   return { el, destroy() { preview.dispose(); } };
 }
 
-// ═══ Code, QR & barcode ══════════════════════════════════════════════════════════════════
+// ═══ Header & QR code / Barcode ══════════════════════════════════════════════════════════
 
-export function codesScreen(nav) {
+export const barcodeChanged = (c) => c.barcodeLink !== READER_LINK || c.barcodeCaption !== READER_CAPTION;
+export const resetBarcode = () => edit((x) => ({ ...x, barcodeLink: READER_LINK, barcodeCaption: READER_CAPTION }));
+
+/** The barcode links to the reader that decodes the QR; nudge people to leave it alone. */
+export const barcodeNotice = () => h('div', { class: 'notice' }, icon(I.warning, { size: 16, stroke: 2.4, color: 'var(--orange)' }),
+  h('p', { class: 'body muted' }, 'Best left as is. The barcode opens NEOSCAN, the reader that decodes this card’s QR. Change it only if you host your own reader.'));
+
+/**
+ * [part] 'TOP': code, subline and QR ("Header & QR code"); 'BOTTOM': barcode link, caption and
+ * symbol. [focusQr] scrolls to the QR section (opened from the QR on the card).
+ */
+export function codesScreen(nav, part = 'TOP', focusQr = false) {
+  const bottom = part === 'BOTTOM';
   const c0 = draft();
-  // Live crop of the card's header, pinned so subline tweaks stay visible while scrolling.
-  const head = canvasView((ctx, w) => { const c = draft(); if (c) drawCard(ctx, c, cardCodes(payload(c.qr), c.barcodeLink), 0, 0, w); }, 'head-canvas', 'Card header preview');
+  // Live crop of the part being edited, pinned so tweaks stay visible while scrolling.
+  const head = canvasView((ctx, w) => {
+    const c = draft(); if (!c) return;
+    const g = cardGeometry(c), top = bottom ? g.capTop - 8 : 0;
+    drawCard(ctx, c, cardCodes(payload(c.qr), c.barcodeLink), 0, -top * w / g.w, w);
+  }, 'head-canvas', bottom ? 'Barcode preview' : 'Card header preview');
+  const sizeHead = (c) => { const g = cardGeometry(c); head.style.aspectRatio = bottom ? `${g.w} / ${g.h - (g.capTop - 8)}` : '2.9'; };
+  sizeHead(c0);
   const meta = h('p', { class: 'mono-small' });
 
-  // Card
+  // Header
   const code = textField('Card code', c0.code, (v) => edit((x) => ({ ...x, code: v.toUpperCase() })), { mono: true, max: 8, caps: true, supporting: 'Required · e.g. KK-01, NX-07' });
   const sub = textField('Subline (optional)', c0.subText, (v) => edit((x) => ({ ...x, subText: v.toUpperCase() })), { mono: true, max: 24, caps: true });
   const graphic = chipGroup(Object.keys(SUB_GRAPHICS), c0.subGraphic, (g) => SUB_GRAPHICS[g], (g) => { edit((x) => ({ ...x, subGraphic: g })); syncGraphic(); });
@@ -135,7 +154,6 @@ export function codesScreen(nav) {
     const g = draft().subGraphic;
     graphicCtl.replaceChildren(...(isPattern(g) ? [widthSl] : g === 'SYMBOL' ? [subSym, repeat] : []));
   }
-  syncGraphic();
 
   // QR
   const qrType = segmented(Object.keys(QR_TYPES), c0.qr.type, (t) => QR_TYPES[t], (t) => { edit((x) => ({ ...x, qr: { ...x.qr, type: t } })); renderQrEditor(); });
@@ -149,8 +167,9 @@ export function codesScreen(nav) {
     else if (t === 'LINK') qrEditor.replaceChildren(qrField('link', 'Link', { mono: true, max: 120, type: 'url', inputmode: 'url' }));
     else qrEditor.replaceChildren(qrField('text', 'Text', { max: 200, multiline: true, autocapitalize: 'sentences' }));
   }
-  const capacity = capacityPanel();
+  const capacity = bottom ? null : capacityPanel();
   const qrPos = segmented([false, true], c0.qrRight, (v) => (v ? 'Right' : 'Left'), (v) => edit((x) => ({ ...x, qrRight: v })));
+  const qrLabel = sectionLabel('QR code · required', 'orange mt');
 
   // Barcode
   const meter = h('div', { class: 'meter' }, h('i'));
@@ -158,27 +177,38 @@ export function codesScreen(nav) {
   const link = textField('Reader app link', c0.barcodeLink, (v) => edit((x) => ({ ...x, barcodeLink: v })), { mono: true, max: 40, supporting: 'Shorter links make wider bars', type: 'url', inputmode: 'url' });
   const caption = textField('Caption', c0.barcodeCaption, (v) => edit((x) => ({ ...x, barcodeCaption: v.toUpperCase() })), { mono: true, max: 16, caps: true });
   const capSym = symbolPicker(c0.symbol, (s) => edit((x) => ({ ...x, symbol: s })));
+  const reset = h('button', { type: 'button', class: 'text-btn lime', onclick: () => resetBarcode() }, icon(I.undo, { size: 18 }), ' Reset to NEOSCAN defaults');
 
+  const body = bottom
+    ? [barcodeNotice(), reset, sectionLabel('Barcode · always at the bottom', 'orange mt'), link, meter, longNote, caption, sectionLabel('Caption symbol'), capSym]
+    : [meta, sectionLabel('Header', 'orange mt'), code, sub, sectionLabel('Subline graphic'), graphic, graphicCtl,
+      qrLabel, qrType, qrEditor, capacity, h('div', { class: 'inline' }, h('span', { class: 'title grow' }, 'Position'), qrPos)];
+  const scroll = h('div', { class: 'scroll' }, body);
   const el = h('main', { class: 'screen codes' },
-    h('header', { class: 'topbar' }, iconButton(I.back, 'Back to builder', () => nav.back()), h('h1', { class: 'bar-title grow' }, 'Code, QR & barcode')),
-    h('div', { class: 'head-box' }, head),
-    h('div', { class: 'scroll' }, meta,
-      sectionLabel('Card', 'orange mt'), code, sub, sectionLabel('Subline graphic'), graphic, graphicCtl,
-      sectionLabel('QR code · required', 'orange mt'), qrType, qrEditor, capacity, h('div', { class: 'inline' }, h('span', { class: 'title grow' }, 'Position'), qrPos),
-      sectionLabel('Barcode · required · always at the bottom', 'orange mt'), link, meter, longNote, caption, sectionLabel('Caption symbol'), capSym),
+    h('header', { class: 'topbar' }, iconButton(I.back, 'Back to builder', () => nav.back()), h('h1', { class: 'bar-title grow' }, bottom ? 'Barcode' : 'Header & QR code')),
+    h('div', { class: 'head-box' }, head), scroll,
     h('div', { class: 'action-bar single' }, primary('Done', () => nav.back())));
-  head.style.aspectRatio = '2.9';
 
   function update(c) {
+    sizeHead(c);
     head.invalidate();
+    if (bottom) {
+      const len = c.barcodeLink.length;
+      meter.firstChild.style.width = `${Math.min(1, len / 24) * 100}%`;
+      meter.classList.toggle('over', len > 24);
+      longNote.hidden = len <= 24;
+      reset.hidden = !barcodeChanged(c);
+      // Reset (or another tab) changed the text: show it, never under the cursor.
+      if (document.activeElement !== link.input) link.setValue(c.barcodeLink);
+      if (document.activeElement !== caption.input) caption.setValue(c.barcodeCaption);
+      return;
+    }
     const codes = cardCodes(payload(c.qr), c.barcodeLink);
     const kind = c.qr.type === 'CONTACT' ? 'VCARD' : c.qr.type === 'FIELDS' ? 'NP1' : c.qr.type;
     meta.textContent = `${kind} · ${codes.qrBytes} B · V${codes.qrVersion} · ECC ${codes.qrEcc}`;
     capacity.update(c, codes.plan);
-    const len = c.barcodeLink.length;
-    meter.firstChild.style.width = `${Math.min(1, len / 24) * 100}%`;
-    meter.classList.toggle('over', len > 24);
-    longNote.hidden = len <= 24;
+    if (document.activeElement !== code.input) code.setValue(c.code);
+    if (document.activeElement !== sub.input) sub.setValue(c.subText);
     fieldsApi?.update(c);
   }
 
@@ -280,8 +310,10 @@ export function codesScreen(nav) {
     return wrap;
   }
 
-  renderQrEditor();
+  if (!bottom) { syncGraphic(); renderQrEditor(); }
   update(c0);
+  // Opened from the QR on the card: land on the QR section once it is laid out.
+  if (focusQr) requestAnimationFrame(() => requestAnimationFrame(() => scroll.scrollTo({ top: Math.max(0, qrLabel.offsetTop - scroll.offsetTop - 16), behavior: 'smooth' })));
   return { el, update, destroy() { head.dispose(); } };
 }
 

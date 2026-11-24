@@ -220,7 +220,7 @@ function patternStrip(ctx, p, x, y, w, h, ink, sw, k) {
 }
 
 /** Draws one row at (x, y) in card units. Also used by row previews in the UI. */
-export function drawRow(ctx, r, cfg, x, y, width, ink) {
+export function drawRow(ctx, r, cfg, x, y, width, ink, hideValue = false) {
   const rh = rowHeight(r);
   // Extra height above the default is split evenly above and below the content.
   const dy = (rh - ROW_KINDS[r.kind].def) / 2;
@@ -232,8 +232,10 @@ export function drawRow(ctx, r, cfg, x, y, width, ink) {
       const lab = line(r.label.toUpperCase(), MONO_S, 50);
       drawLine(ctx, lab, cx, y + dy + 8.5 - lab.height / 2, ink);
       cx += 57;
-      const v = line(r.value, VALUE_S, x + width - cx);
-      drawLine(ctx, v, cx, y + dy + 8.5 - v.height / 2, ink);
+      if (!hideValue) {
+        const v = line(r.value, VALUE_S, x + width - cx);
+        drawLine(ctx, v, cx, y + dy + 8.5 - v.height / 2, ink);
+      }
       ctx.fillStyle = ink; ctx.fillRect(x, y + rh - 1, width, 1);
       break;
     }
@@ -342,39 +344,139 @@ function tickPart(ctx, [kind, a, b], st, x, ink, paper) {
   }
 }
 
-/**
- * Draws a card with its top-left at (x, y), [widthPx] wide (height follows the ratio).
- * Returns { shown, total }: how many body rows fit.
- */
-export function drawCard(ctx, cfg, codes, x, y, widthPx) {
-  const [w, h] = unitSize(cfg);
-  const s = widthPx / w;
-  ctx.save();
-  ctx.translate(x, y); ctx.scale(s, s);
-  const shape = cardShape(cfg, w, h);
-  ctx.fillStyle = css(cfg.labelColor); ctx.fill(shape);
-  ctx.clip(shape);
-  const info = drawCardContent(ctx, cfg, codes, w, h, css(cfg.ink));
-  ctx.restore();
-  return info;
+// ── Geometry ───────────────────────────────────────────────────────────────────────
+// Where every part of a card sits, in card units. Drawing, hit-testing and the builder's on-card
+// overlays all read this, so a tap or a text cursor lands exactly on what is drawn.
+
+const ROW_GAP = 7;
+/** Code text size in card units for this card's shape. */
+export const codeSize = (cfg) => { const [w, h] = unitSize(cfg); return w > h ? 40 : w < 280 ? 38 : 46; };
+/** Fonts for the builder's inline fields: { family, weight, size, ls } in card units (ls in em). */
+export const CODE_FONT = { family: SANS, weight: 700, ls: -0.05 };
+export const VALUE_FONT = { family: SANS, weight: 500, size: 13.5, ls: 0 };
+
+function valueRect(r, y, rh, right) {
+  if (!(r.kind === 'owner' || r.kind === 'contact' || r.kind === 'date' || r.kind === 'custom')) return null;
+  const dy = (rh - ROW_KINDS[r.kind].def) / 2;
+  const x = PAD + (r.kind === 'custom' && r.icon !== 'none' ? 18 : 0) + 57;
+  return { x, y: y + dy, w: right - x, h: 17 };
 }
 
-function drawCardContent(ctx, cfg, codes, w, h, ink) {
+/** Body rows laid out top to bottom from [top]; once one runs into the footer, every later row is off the card. */
+function slotRows(rows, top, bottomTop, right) {
+  let ry = top, ok = true;
+  return rows.map((r) => {
+    const rh = rowHeight(r);
+    if (ry + rh > bottomTop + 0.5) ok = false;
+    const slot = { row: r, top: ry, height: rh, fits: ok, value: valueRect(r, ry, rh, right) };
+    ry += rh + ROW_GAP;
+    return slot;
+  });
+}
+
+const geoCache = new WeakMap();
+/**
+ * { w, h, qr, qrX, textX, textW, innerW, codeH, hasSub, fills, fillsH, headerH, ruleY, contentTop,
+ *   barH, barTop, capTop, bottomTop, rows: [{ row, top, height, fits, value }], code/header/qr/footer rects,
+ *   rowsShown, slotsFor(order) }. Cached per card object (every edit makes a new one).
+ */
+export function cardGeometry(cfg) {
+  let g = geoCache.get(cfg);
+  if (g) return g;
+  const [w, h] = unitSize(cfg);
   const landscape = w > h;
   const qr = Math.min(76, h * 0.22);
   const innerW = w - 2 * PAD;
   const textX = cfg.qrRight ? PAD : PAD + qr + 12;
   const textW = innerW - qr - 12;
+  const codeH = codeSize(cfg) * 0.9;
+  let y = PAD + codeH;
+  const hasSub = !!(cfg.subText.trim() || cfg.subGraphic !== 'NONE');
+  const subY = y + 7;
+  if (hasSub) y += 17;
+  const fills = cfg.headFill.filter((r) => ROW_KINDS[r.kind].filler);
+  const fillsH = fills.length ? fills.reduce((a, r) => a + rowHeight(r), 0) + 5 * (fills.length - 1) : 0;
+  const headerH = Math.max(qr, (y - PAD) + (fills.length ? 7 + fillsH : 0));
+  const ruleY = PAD + headerH + 10;
+  const contentTop = ruleY + 1.5 + 9;
+  const barH = landscape ? 34 : 40;
+  const barTop = h - PAD_B - barH;
+  const capTop = barTop - 5 - 10;
+  const bottomTop = capTop - 9;
+  const qrX = cfg.qrRight ? w - PAD - qr : PAD;
+  const rows = slotRows(cfg.rows, contentTop, bottomTop, PAD + innerW);
+  g = {
+    w, h, landscape, qr, qrX, innerW, textX, textW, codeH, hasSub, subY, fills, fillsH, headerH,
+    ruleY, contentTop, barH, barTop, capTop, bottomTop, rows,
+    rowLeft: PAD, rowRight: PAD + innerW,
+    code: { x: textX, y: PAD, w: textW, h: codeH },
+    header: { x: textX, y: PAD, w: textW, h: headerH },
+    qrRect: { x: qrX, y: PAD, w: qr, h: qr },
+    footer: { x: PAD, y: capTop - 1, w: innerW, h: barTop + barH - capTop + 1 },
+    rowsShown: rows.filter((s) => s.fits).length,
+    /** Body rows laid out in [order] from the same top, e.g. a reorder in progress. */
+    slotsFor: (order) => slotRows(order, contentTop, bottomTop, PAD + innerW),
+  };
+  geoCache.set(cfg, g);
+  return g;
+}
+
+/** Target ids: 'header' | 'qr' | 'footer' | row id (number). Rect of a target in card units, or null. */
+export function targetRect(g, t) {
+  if (t === 'header') return g.header;
+  if (t === 'qr') return g.qrRect;
+  if (t === 'footer') return g.footer;
+  const s = g.rows.find((x) => x.row.id === t && x.fits);
+  return s ? { x: g.rowLeft, y: s.top, w: g.innerW, h: s.height } : null;
+}
+
+/** What a tap at (x, y) in card units lands on. Each row also owns half the gap around it. */
+export function hitTarget(g, x, y) {
+  const s = g.rows.find((r) => r.fits && y >= r.top - ROW_GAP / 2 && y < r.top + r.height + ROW_GAP / 2);
+  if (s) return s.row.id;
+  const inside = (r, m) => x >= r.x - m && x <= r.x + r.w + m && y >= r.y - m && y <= r.y + r.h + m;
+  if (inside(g.qrRect, 6)) return 'qr';
+  if (inside(g.header, 6)) return 'header';
+  if (y >= g.capTop - 6) return 'footer';
+  return null;
+}
+
+// ── Card ───────────────────────────────────────────────────────────────────────────────
+
+/** Plate and ink for rows that won't be on the card (reorder view only). */
+const OVERFLOW_PLATE = '#A3A3A8', OVERFLOW_INK = '#34343A';
+
+/**
+ * Draws a card with its top-left at (x, y), [widthPx] wide (height follows the ratio).
+ * Returns { shown, total }: how many body rows fit.
+ * Builder-only [opts] (the defaults draw the card exactly as it is exported):
+ * hideValueOf / hideCode leave room for an on-card text field; showOverflow draws rows that
+ * don't fit greyed out over the footer; dragRowId is drawn last, shifted by dragDy units;
+ * geo draws with another row order's geometry.
+ */
+export function drawCard(ctx, cfg, codes, x, y, widthPx, opts = null) {
+  const g = opts?.geo || cardGeometry(cfg);
+  const s = widthPx / g.w;
+  ctx.save();
+  ctx.translate(x, y); ctx.scale(s, s);
+  const shape = cardShape(cfg, g.w, g.h);
+  ctx.fillStyle = css(cfg.labelColor); ctx.fill(shape);
+  ctx.clip(shape);
+  drawCardContent(ctx, cfg, codes, g, css(cfg.ink), opts || {});
+  ctx.restore();
+  return { shown: g.rowsShown, total: g.rows.length };
+}
+
+function drawCardContent(ctx, cfg, codes, g, ink, o) {
+  const { w, h, textX, textW, innerW } = g;
 
   // ── Header: code, subline, header fillers ──
-  const codeSize = landscape ? 40 : w < 280 ? 38 : 46;
-  const code = line(cfg.code.trim() ? cfg.code : ' ', codeStyle(codeSize), textW);
-  const codeH = codeSize * 0.9;
-  drawLine(ctx, code, textX, PAD, ink, codeH);
-  let y = PAD + codeH;
-  const hasSub = cfg.subText.trim() || cfg.subGraphic !== 'NONE';
-  if (hasSub) {
-    y += 7;
+  if (!o.hideCode) {
+    const code = line(cfg.code.trim() ? cfg.code : ' ', codeStyle(codeSize(cfg)), textW);
+    drawLine(ctx, code, textX, PAD, ink, g.codeH);
+  }
+  if (g.hasSub) {
+    const y = g.subY;
     let x = textX;
     const gy = y + 1;
     // Patterns never take more than the text column; text after them gets what is left.
@@ -398,47 +500,47 @@ function drawCardContent(ctx, cfg, codes, w, h, ink) {
       const sub = line(cfg.subText, SUB_S, textX + textW - x);
       drawLine(ctx, sub, x, y + 5 - sub.height / 2, ink);
     }
-    y += 10;
   }
-  const fills = cfg.headFill.filter((r) => ROW_KINDS[r.kind].filler);
-  const fillsH = fills.length ? fills.reduce((a, r) => a + rowHeight(r), 0) + 5 * (fills.length - 1) : 0;
-  const headerH = Math.max(qr, (y - PAD) + (fills.length ? 7 + fillsH : 0));
-  let fy = PAD + headerH - fillsH;
-  for (const r of fills) { drawRow(ctx, r, cfg, textX, fy, textW, ink); fy += rowHeight(r) + 5; }
+  let fy = PAD + g.headerH - g.fillsH;
+  for (const r of g.fills) { drawRow(ctx, r, cfg, textX, fy, textW, ink); fy += rowHeight(r) + 5; }
 
   // QR with a 2-module quiet zone; the card colour is the light module colour.
-  const qrX = cfg.qrRight ? w - PAD - qr : PAD;
-  const mod = qr / (codes.qrModules + 4);
-  ctx.save(); ctx.translate(qrX + 2 * mod, PAD + 2 * mod); ctx.scale(mod, mod);
+  const mod = g.qr / (codes.qrModules + 4);
+  ctx.save(); ctx.translate(g.qrX + 2 * mod, PAD + 2 * mod); ctx.scale(mod, mod);
   ctx.fillStyle = ink; ctx.fill(codes.qrPath);
   ctx.restore();
 
-  const ruleY = PAD + headerH + 10;
-  ctx.fillStyle = ink; ctx.fillRect(PAD, ruleY, innerW, 1.5);
-  const contentTop = ruleY + 1.5 + 9;
+  ctx.fillStyle = ink; ctx.fillRect(PAD, g.ruleY, innerW, 1.5);
 
   // ── Footer: caption + barcode, always last ──
-  const barH = landscape ? 34 : 40;
-  const barTop = h - PAD_B - barH;
-  const capTop = barTop - 5 - 10;
-  const bottomTop = capTop - 9;
+  const capTop = g.capTop;
   icon(ctx, symbols[cfg.symbol], PAD, capTop - 0.5, 11, ink, true);
   const cap = line(cfg.barcodeCaption, MONO_S, innerW / 2);
   drawLine(ctx, cap, PAD + 17, capTop + 5 - cap.height / 2, ink);
   const link = line(cfg.barcodeLink, MONO_S, innerW - 17 - cap.width - 12);
   drawLine(ctx, link, w - PAD - link.width, capTop + 5 - link.height / 2, ink);
-  ctx.save(); ctx.translate(PAD, barTop); ctx.scale(innerW / codes.barModules, barH);
+  ctx.save(); ctx.translate(PAD, g.barTop); ctx.scale(innerW / codes.barModules, g.barH);
   ctx.fillStyle = ink; ctx.fill(codes.barPath);
   ctx.restore();
 
   // ── Body rows, top to bottom, until space runs out ──
-  let ry = contentTop, shown = 0;
-  for (const r of cfg.rows) {
-    const rh = rowHeight(r);
-    if (ry + rh > bottomTop + 0.5) break;
-    drawRow(ctx, r, cfg, PAD, ry, innerW, ink);
-    ry += rh + 7; shown++;
+  // Rows past the free space share one grey band over the footer, so they read as a block that
+  // won't print and the barcode doesn't show through the gaps between them.
+  if (o.showOverflow) {
+    const over = g.rows.filter((s) => !s.fits && s.row.id !== o.dragRowId);
+    if (over.length) {
+      const top = over[0].top - ROW_GAP / 2, last = over[over.length - 1];
+      ctx.fillStyle = OVERFLOW_PLATE; ctx.fillRect(PAD - 4, top, innerW + 8, last.top + last.height + ROW_GAP / 2 - top);
+    }
   }
+  let dragged = null;
+  for (const s of g.rows) {
+    if (s.row.id === o.dragRowId) { dragged = s; continue; }
+    if (s.fits) drawRow(ctx, s.row, cfg, PAD, s.top, innerW, ink, s.row.id === o.hideValueOf);
+    else if (o.showOverflow) drawRow(ctx, s.row, cfg, PAD, s.top, innerW, OVERFLOW_INK);
+    else break;
+  }
+  if (dragged) drawRow(ctx, dragged.row, cfg, PAD, dragged.top + (o.dragDy || 0), innerW, ink);
 
   if (cfg.cornerMarks) {
     const p = new Path2D();
@@ -447,7 +549,6 @@ function drawCardContent(ctx, cfg, codes, w, h, ink) {
     if (cfg.corner !== 'CUT') { mark(w - 6, 6, -1, 1); mark(6, h - 6, 1, -1); }
     stroke(ctx, p, ink, 1);
   }
-  return { shown, total: cfg.rows.length };
 }
 
 // ── Wallpaper ──────────────────────────────────────────────────────────────────────────
