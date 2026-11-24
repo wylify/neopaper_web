@@ -22,12 +22,16 @@ export const ROW_KINDS = {
   chevrons: { title: 'Chevrons',     filler: true,  def: 12, min: 4,  max: 48 },
   ticks:    { title: 'Ruler ticks',  filler: true,  def: 12, min: 4,  max: 48 },
   circuit:  { title: 'Circuit trace', filler: true, def: 16, min: 4,  max: 48 },
+  hanzi:    { title: '警告 Chinese',  filler: true,  def: 14, min: 10, max: 32 },
+  kana:     { title: '危険 Japanese', filler: true,  def: 14, min: 10, max: 32 },
+  cyrillic: { title: 'ВНИМАНИЕ Russian', filler: true, def: 14, min: 10, max: 32 },
+  hangul:   { title: '경고 Korean',   filler: true,  def: 14, min: 10, max: 32 },
   rule:     { title: 'Thin rule',    filler: true,  def: 1,  min: 1,  max: 3 },
   thick:    { title: 'Thick rule',   filler: true,  def: 4,  min: 2,  max: 12 },
   space:    { title: 'Spacer',       filler: true,  def: 8,  min: 2,  max: 64 },
 };
 export const INFO_KINDS = ['owner', 'contact', 'date', 'checks', 'warning', 'micro'];
-export const FILLER_KINDS = ['hazard', 'x', 'dots', 'scan', 'glitch', 'chevrons', 'ticks', 'circuit', 'rule', 'thick', 'space'];
+export const FILLER_KINDS = ['hazard', 'x', 'dots', 'scan', 'glitch', 'chevrons', 'ticks', 'circuit', 'hanzi', 'kana', 'cyrillic', 'hangul', 'rule', 'thick', 'space'];
 export const kindOf = (k) => ROW_KINDS[k] ? k : 'space';
 export const isField = (k) => k === 'owner' || k === 'contact' || k === 'date' || k === 'custom';
 export const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));

@@ -2,6 +2,11 @@
 
 @font-face { font-family: 'Space Grotesk'; src: url(../fonts/space_grotesk.ttf) format('truetype'); font-weight: 300 700; font-display: swap; }
 @font-face { font-family: 'JetBrains Mono'; src: url(../fonts/jetbrains_mono.ttf) format('truetype'); font-weight: 100 800; font-display: swap; }
+/* Foreign-script warning fillers (SIL OFL 1.1), cut down to the glyphs those rows print. */
+@font-face { font-family: 'Warn Hanzi'; src: url(../fonts/warn_hanzi.ttf) format('truetype'); font-display: swap; }
+@font-face { font-family: 'Warn Kana'; src: url(../fonts/warn_kana.ttf) format('truetype'); font-display: swap; }
+@font-face { font-family: 'Warn Cyrillic'; src: url(../fonts/warn_cyrillic.ttf) format('truetype'); font-display: swap; }
+@font-face { font-family: 'Warn Hangul'; src: url(../fonts/warn_hangul.ttf) format('truetype'); font-display: swap; }
 
 :root {
   --bg: #0E0E11; --surface: #16161A; --surface2: #1E1E24; --bar: #141418; --line: #24242B;

@@ -273,8 +273,72 @@ export function drawRow(ctx, r, cfg, x, y, width, ink) {
       patternStrip(ctx, G[r.kind], x, y, width, rh, ink, sw, rh / ROW_KINDS[r.kind].def);
       break;
     }
+    case 'hanzi': case 'kana': case 'cyrillic': case 'hangul':
+      ticker(ctx, TICKERS[r.kind], x, y, width, rh, ink, css(cfg.labelColor));
+      break;
     case 'rule': case 'thick': ctx.fillStyle = ink; ctx.fillRect(x, y, width, rh); break;
     default: break;
+  }
+}
+
+// ── Foreign-script warning tickers ─────────────────────────────────────────────────────
+// A short run of parts laid out on a 14-unit row and repeated across the width, like signage
+// tape. Taller rows scale the whole run. Same parts as the Android CardRenderer.kt.
+
+const TAG_S = style(MONO, 700, 4.6, 0.1);
+const TICKERS = {
+  // "Warning · high voltage danger · keep away"
+  hanzi: { st: style('"Warn Hanzi"', 400, 10, 0.04), parts: [['plate', '警告'], ['words', '高压危险'], ['chev', 14], ['words', '禁止靠近'], ['tag', 'ZH-07', 'WARN'], ['bars', 28]] },
+  // "Danger · no entry · monitored zone"
+  kana: { st: style('"Warn Kana"', 400, 9.5, 0.06), parts: [['words', '危険'], ['plate', '立入禁止'], ['words', '監視区域'], ['tag', 'JP-13', 'KEIKOKU'], ['stripes', 20]] },
+  // "Attention · danger zone · do not enter"
+  cyrillic: { st: style('"Warn Cyrillic"', 400, 8, 0.08), parts: [['plate', 'ВНИМАНИЕ'], ['words', 'ОПАСНАЯ ЗОНА'], ['stripes', 22], ['words', 'НЕ ВХОДИТЬ'], ['tag', 'RU-21', 'VNIM']] },
+  // "Warning · no entry · surveillance zone"
+  hangul: { st: style('"Warn Hangul"', 400, 9.5, 0.02), parts: [['plate', '경고'], ['words', '출입금지'], ['bars', 18], ['words', '감시구역'], ['tag', 'KR-44', 'GYEONGGO'], ['chev', 14]] },
+};
+
+function ticker(ctx, t, x, y, width, rh, ink, paper) {
+  clipRect(ctx, x, y, width, rh, () => {
+    const k = rh / 14, w = width / k;
+    ctx.save(); ctx.translate(x, y); ctx.scale(k, k);
+    let cx = 0;
+    while (cx < w) {
+      for (const p of t.parts) {
+        if (cx >= w) break;
+        cx += tickPart(ctx, p, t.st, cx, ink, paper) + 6;
+      }
+    }
+    ctx.restore();
+  });
+}
+
+/** Draws one part with its left edge at [x] on a 14-unit row and returns its width. */
+function tickPart(ctx, [kind, a, b], st, x, ink, paper) {
+  switch (kind) {
+    case 'plate': {
+      const t = line(a, st), pw = t.width + 6;
+      ctx.fillStyle = ink; ctx.fillRect(x, 1, pw, 12);
+      // A notch in the top-right corner, like the card's cut corner.
+      ctx.fillStyle = paper; ctx.beginPath(); ctx.moveTo(x + pw - 3, 1); ctx.lineTo(x + pw, 1); ctx.lineTo(x + pw, 4); ctx.closePath(); ctx.fill();
+      drawLine(ctx, t, x + 3, 7 - t.height / 2, paper);
+      return pw;
+    }
+    case 'words': { const t = line(a, st); drawLine(ctx, t, x, 7 - t.height / 2, ink); return t.width; }
+    case 'tag': {
+      const top = line(a, TAG_S), bot = line(b, TAG_S);
+      ctx.fillStyle = ink; ctx.fillRect(x, 2, 1, 10);
+      drawLine(ctx, top, x + 3, 4.5 - top.height / 2, ink);
+      drawLine(ctx, bot, x + 3, 9.5 - bot.height / 2, ink);
+      return 3 + Math.max(top.width, bot.width);
+    }
+    case 'stripes': stripes(ctx, x, 3, a, 8, 2.5, 3, ink); return a;
+    case 'bars':
+      clipRect(ctx, x, 3, a, 8, () => { ctx.save(); ctx.translate(x, 3); ctx.fillStyle = ink; ctx.fill(G.subBars); ctx.restore(); });
+      return a;
+    case 'chev':
+      clipRect(ctx, x, 2, a, 10, () => { ctx.save(); ctx.translate(x, 3); stroke(ctx, G.subChevrons, ink, 1.6); ctx.restore(); });
+      return a;
+    default: return 0;
   }
 }
 

@@ -108,7 +108,8 @@ async function start() {
   initHistory();
   setEditingCheck(() => screens.length > 1);
   // Canvas text needs the real fonts: wait for them (briefly) before the first paint.
-  const fonts = Promise.all(['700 46px "Space Grotesk"', '500 13px "Space Grotesk"', '600 8px "JetBrains Mono"', '400 8px "JetBrains Mono"', '700 8px "JetBrains Mono"']
+  const fonts = Promise.all(['700 46px "Space Grotesk"', '500 13px "Space Grotesk"', '600 8px "JetBrains Mono"', '400 8px "JetBrains Mono"', '700 8px "JetBrains Mono"',
+    '10px "Warn Hanzi"', '10px "Warn Kana"', '10px "Warn Cyrillic"', '10px "Warn Hangul"']
     .map((f) => document.fonts.load(f))).catch(() => {});
   await Promise.all([init(), Promise.race([fonts, new Promise((r) => setTimeout(r, 1500))])]);
   resetTextCache();

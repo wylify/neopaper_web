@@ -1,6 +1,6 @@
 // Offline-first: every file the app needs is cached on install. Bump VERSION on each release
 // (and APP_VERSION in js/config.js) so installed copies pick up the new files.
-const VERSION = 'neopaper-web-1.3.0';
+const VERSION = 'neopaper-web-1.4.0';
 const ASSETS = [
   './', './index.html', './manifest.webmanifest', './css/style.css',
   './js/app.js', './js/builder.js', './js/capacity.js', './js/code128.js', './js/codes.js', './js/colorpicker.js',
@@ -9,6 +9,7 @@ const ASSETS = [
   './js/render.js', './js/scan.js', './js/settings.js', './js/sheet.js', './js/state.js', './js/store.js', './js/ui.js',
   './vendor/zxing/zxing-reader.js', './vendor/zxing/zxing_reader.wasm',
   './fonts/space_grotesk.ttf', './fonts/jetbrains_mono.ttf',
+  './fonts/warn_hanzi.ttf', './fonts/warn_kana.ttf', './fonts/warn_cyrillic.ttf', './fonts/warn_hangul.ttf',
   './icons/favicon.svg', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png', './icons/apple-touch-icon.png',
 ];
 
