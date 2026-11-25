@@ -1,5 +1,5 @@
 // Home: saved cards, templates and settings (ui/HomeScreen.kt), plus backup and install on the web.
-import { vibrate, settings, setSettings, ORIENTATIONS, CARD_EDITORS, screenIsSmallSquarish, guides, setGuides } from './settings.js';
+import { vibrate, settings, setSettings, validSettings, ORIENTATIONS, CARD_EDITORS, screenIsSmallSquarish, guides, setGuides } from './settings.js';
 import { pushLayer, pop, isTop } from './nav.js';
 import { h, icon, I, outline, primary, sectionLabel, tag, toast, segmented, switchRow } from './ui.js';
 import { S, subscribe, createCard, deleteCard, undoDelete, flush } from './state.js';
@@ -7,7 +7,7 @@ import { templates, ratioLabel, css, toJson, fromJson, cloneCard, RATIOS, DEVICE
 import { deviceSize } from './export.js';
 import { cardCanvas } from './previews.js';
 import { openSheet } from './sheet.js';
-import { getPhoto, putPhoto, isPersisted, persist } from './store.js';
+import { putPhoto, isPersisted, persist } from './store.js';
 import { isIos, download } from './export.js';
 import { install, canInstall, standalone } from './install.js';
 import { APP_VERSION, READER_URL } from './config.js';
@@ -163,7 +163,7 @@ export function homeScreen(nav) {
       sectionLabel('Storage'),
       h('div', { class: 'panel-box' }, persistLine, persistBtn,
         h('div', { class: 'row' }, outline('Back up', () => exportBackup(), { icon: I.download }), outline('Restore', () => importInput.click(), { icon: I.upload })), importInput,
-        h('p', { class: 'mono-small' }, 'BACKUP = ONE .JSON FILE WITH CARDS AND PHOTOS. RESTORE ADDS ITS CARDS TO THESE.')),
+        h('p', { class: 'mono-small' }, 'BACKUP = ONE .JSON FILE WITH CARDS AND SETTINGS, ALSO READ BY THE ANDROID APP. BACKGROUND PHOTOS STAY ON THIS DEVICE: THOSE CARDS COME BACK WITH A COLOUR. RESTORE ADDS ITS CARDS TO THESE.')),
       sectionLabel('Reader app'),
       h('a', { class: 'panel-box link-box', href: READER_URL, target: '_blank', rel: 'noopener' },
         h('span', { class: 'grow' }, h('span', { class: 'title' }, 'NEOSCAN'), h('span', { class: 'body muted' }, 'The scanner your card’s barcode points to. Anyone can open it to read your QR.')),
@@ -209,42 +209,49 @@ function longPress(el, fn) {
 }
 
 // ── Backup ──────────────────────────────────────────────────────────────────────────────
+// Same file as the Android app (data/Backup.kt): cards and settings, no background photos.
+// { app: 'NEOPAPER', format: 2, exportedAt, cards: [card…], settings: {…} }
 
-const blobToDataUrl = (b) => new Promise((r, j) => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.onerror = j; fr.readAsDataURL(b); });
+const BACKUP_SETTINGS = ['ratio', 'orientation', 'exportPreset', 'exportScale', 'exportPng', 'guidesOn', 'guideScreen', 'haptics', 'cardEditor'];
+/** The user's own photos stay on this device: such cards come back with their colour background. */
+const withoutPhoto = (o) => (o.photoUri == null && o.bgMode === 'COLOR' ? o : { ...o, photoUri: null, bgMode: 'COLOR' });
 
 async function exportBackup() {
   await flush();
-  const photos = {};
-  for (const c of S.cards) {
-    const id = c.photoUri?.startsWith('idb:') ? c.photoUri.slice(4) : null;
-    if (id && !photos[id]) { const b = await getPhoto(id); if (b) photos[id] = await blobToDataUrl(b); }
-  }
-  const data = { app: 'NEOPAPER', format: 1, exportedAt: new Date().toISOString(), cards: S.cards.map(toJson), photos };
+  const data = {
+    app: 'NEOPAPER', format: 2, exportedAt: new Date().toISOString(),
+    cards: S.cards.map((c) => withoutPhoto(toJson(c))),
+    settings: Object.fromEntries(BACKUP_SETTINGS.map((k) => [k, settings[k]])),
+  };
   const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
   download(blob, `neopaper-backup-${new Date().toISOString().slice(0, 10)}.json`);
   toast('Backup saved');
 }
 
+
 async function importBackup(file) {
   try {
     const data = JSON.parse(await file.text());
-    // Accept a NEOPAPER web backup or a bare card array (the Android app's cards.json).
+    // A backup from either app, or a bare card array (the Android app's cards.json).
     const list = Array.isArray(data) ? data : Array.isArray(data?.cards) ? data.cards : null;
-    if (!list) throw new Error('not a backup');
+    if (!list || (data.app != null && data.app !== 'NEOPAPER')) throw new Error('not a backup');
+    // Format-1 web backups carried photos; those still come back.
     const photos = data.photos && typeof data.photos === 'object' ? data.photos : {};
     let added = 0;
-    for (const o of list.reverse()) {
+    for (const o of [...list].reverse()) {
+      if (!o || typeof o !== 'object') continue;
       const card = cloneCard(fromJson(o));
-      card.updatedAt = typeof o?.updatedAt === 'number' ? o.updatedAt : Date.now();
+      card.updatedAt = typeof o.updatedAt === 'number' ? o.updatedAt : Date.now();
+      card.appliedTo = null;
       const pid = card.photoUri?.startsWith('idb:') ? card.photoUri.slice(4) : null;
       if (pid && typeof photos[pid] === 'string' && photos[pid].startsWith('data:image/')) {
-        const blob = await (await fetch(photos[pid])).blob();
-        await putPhoto(pid, blob);
-      } else if (card.photoUri && !pid) card.photoUri = null; // Android content:// links can't be opened here
+        await putPhoto(pid, await (await fetch(photos[pid])).blob());
+      } else if (card.photoUri || card.bgMode === 'PHOTO') Object.assign(card, { photoUri: null, bgMode: 'COLOR' });
       while (S.cards.some((c) => c.id === card.id)) card.id++;
       S.cards.unshift(card); added++;
     }
     S.cards.sort((a, b) => b.updatedAt - a.updatedAt);
+    if (data.settings && typeof data.settings === 'object') setSettings(validSettings(data.settings));
     await flush();
     toast(`${added} card${added === 1 ? '' : 's'} restored`);
   } catch (e) {

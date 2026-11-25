@@ -21,7 +21,12 @@ const DEFAULTS = {
 function load() {
   let o = {};
   try { o = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch {}
-  const s = { ...DEFAULTS };
+  return { ...DEFAULTS, ...validSettings(o) };
+}
+
+/** The valid known values in [o] (stored settings, a backup's); the rest are left out. */
+export function validSettings(o) {
+  const s = {};
   if (o.ratio in RATIOS) s.ratio = o.ratio;
   if (o.orientation in ORIENTATIONS) s.orientation = o.orientation;
   if (o.exportPreset === DEVICE || DEVICE_PRESETS.some((p) => p.id === o.exportPreset)) s.exportPreset = o.exportPreset;
