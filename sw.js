@@ -1,10 +1,10 @@
 // Offline-first: every file the app needs is cached on install. Bump VERSION on each release
 // (and APP_VERSION in js/config.js) so installed copies pick up the new files.
-const VERSION = 'neopaper-web-1.6.0';
+const VERSION = 'neopaper-web-1.7.0';
 const ASSETS = [
   './', './index.html', './manifest.webmanifest', './css/style.css',
   './js/app.js', './js/builder.js', './js/cardedit.js', './js/capacity.js', './js/code128.js', './js/codes.js', './js/colorpicker.js',
-  './js/colors.js', './js/config.js', './js/editors.js', './js/export.js', './js/home.js', './js/install.js',
+  './js/colors.js', './js/config.js', './js/editors.js', './js/export.js', './js/fold.js', './js/framer.js', './js/home.js', './js/install.js',
   './js/model.js', './js/nav.js', './js/np1.js', './js/parse.js', './js/photo.js', './js/placement.js', './js/previews.js', './js/qr.js',
   './js/render.js', './js/scan.js', './js/settings.js', './js/sheet.js', './js/state.js', './js/store.js', './js/ui.js',
   './vendor/zxing/zxing-reader.js', './vendor/zxing/zxing_reader.wasm',

@@ -285,7 +285,8 @@ async function refreshPhoto() {
 export async function setPhotoBlob(blob) {
   const id = `p${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
   await putPhoto(id, blob);
-  edit((c) => ({ ...c, photoUri: `idb:${id}`, bgMode: 'PHOTO' }));
+  // A new photo starts centred: the old framing was for another picture.
+  edit((c) => ({ ...c, photoUri: `idb:${id}`, bgMode: 'PHOTO', photoZoom: 1, photoX: 0, photoY: 0 }));
 }
 
 /** Photos no card refers to any more (deleted cards, replaced photos) are removed at start-up. */

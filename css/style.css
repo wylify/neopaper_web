@@ -705,3 +705,42 @@ button.stage-note:disabled { cursor: default; pointer-events: none; }
 .ro-fit { margin-top: 10px; }
 .ro-foot { display: flex; align-items: center; gap: 12px; min-height: 76px; padding: 8px calc(var(--safe-r) + 16px) calc(var(--safe-b) + 8px) var(--gut); background: var(--surface); flex: none; }
 @media (max-width: 419px) { .small-btn.compact { padding: 0 11px; } .small-btn .wide-only { display: none; } }
+
+/* ── Dual wallpaper, foldables, photo framing ─────────────────────────────────────────── */
+/* Export with dual on: lock (card) and home (backdrop alone) side by side. */
+.builder-stage.wall-mode .stage-inner.pair { grid-template-columns: 1fr 1fr; gap: 12px; }
+.stage-inner:not(.pair) .stage-home { display: none; }
+.stage-inner.pair .wall-fit::before { content: attr(data-cap); position: absolute; top: -12px; left: 0; right: 0; text-align: center;
+  font-family: var(--mono); font-size: 9px; font-weight: 600; letter-spacing: .16em; color: var(--muted); }
+/* A foldable's open view: the part the closed screen shows. */
+.fold-strip { position: absolute; box-sizing: border-box; border: 1.5px dashed var(--lime); pointer-events: none; }
+.fold-toggle { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 2; display: flex; border: 1px solid var(--line); background: rgba(14, 14, 17, .85); }
+.builder.tabs-hidden .fold-toggle { top: 50px; }
+.fold-toggle button { font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: .08em; padding: 8px 10px; color: var(--muted); min-height: 32px; }
+.fold-toggle button[aria-checked="true"] { background: var(--lime); color: var(--on-accent); }
+/* Backdrop › Resolution and the photo buttons. */
+.res-row { display: flex; align-items: center; gap: 10px; min-height: 56px; padding: 0 14px; background: var(--surface); border: 1px solid var(--line); text-align: left; width: 100%; }
+.res-row .sub { display: block; color: var(--muted); font-size: 13px; }
+.res-row .mono-small.match { color: var(--lime); }
+.res-dialog .radio-list { max-height: min(52vh, 420px); overflow-y: auto; }
+.res-dialog .radio-item .grow { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.photo-btns { display: flex; gap: 8px; }
+.photo-btns .btn { flex: 1; }
+.photo-btns .btn.reset { flex: .6; }
+/* Full-screen photo framer. */
+.sheet-wrap .dialog.fullscreen.framer { cursor: auto; }
+.framer .sheet-body { display: flex; flex-direction: column; gap: 12px; }
+.framer-top { display: flex; align-items: center; gap: 12px; padding: 4px 16px 0; }
+.framer-top .sheet-title { margin: 0; }
+.framer-box { flex: 1; min-height: 0; display: grid; place-items: center; padding: 0 16px; }
+.framer-frame { position: relative; overflow: hidden; touch-action: none; border: 1px solid var(--outline-strong); cursor: grab; outline-offset: 3px; }
+.framer-frame:active { cursor: grabbing; }
+.framer-frame canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.framer-card { opacity: .9; pointer-events: none; }
+.framer-actions { display: flex; gap: 12px; padding: 0 16px 4px; width: 100%; max-width: 640px; align-self: center; box-sizing: border-box; }
+.framer-actions .btn { flex: 1; }
+.framer-actions .btn.wide { flex: 1.2; }
+.ready-pair { display: flex; gap: 8px; }
+.ready-pair figure { margin: 0; display: flex; flex-direction: column; gap: 4px; align-items: center; }
+.ready-pair figcaption { font-family: var(--mono); font-size: 9px; font-weight: 600; letter-spacing: .16em; color: var(--muted); }
+.ready-pair .ready-img { width: 84px; }

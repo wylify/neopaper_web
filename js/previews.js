@@ -4,6 +4,7 @@ import { unitSize, payload, ROW_KINDS, rowHeight, css } from './model.js';
 import { cardCodes } from './codes.js';
 import { drawCard, drawWallpaper, drawRow } from './render.js';
 import { cardOverlaps, guideScreen } from './placement.js';
+import { drawFoldWallpaper, foldStrip } from './fold.js';
 
 const codesFor = (cfg) => cardCodes(payload(cfg.qr), cfg.barcodeLink);
 
@@ -27,19 +28,25 @@ export function cardCanvas(getCfg, onInfo, cls = 'card-canvas') {
  * aspect ratio (getSize() → [w, h]) that fits its box. While opts.guides() names a screen
  * ('HOME' | 'LOCK'), its clock and dock areas are marked on top; a band turns orange when the
  * card runs into it.
+ * opts.fold() → [fold, 'CLOSED' | 'OPEN'] draws a foldable's view: the open one outlines the closed
+ * screen's strip instead of the guides. opts.card() false draws the backdrop alone (dual home).
  * Returns the box, with sync/invalidate/dispose.
  */
 export function wallpaperCanvas(getCfg, getPhoto, getSize, cls = 'wall-canvas', opts = {}) {
   const c = canvasView((ctx, w, h) => {
     const cfg = getCfg();
-    if (cfg) drawWallpaper(ctx, cfg, codesFor(cfg), getPhoto(), w, h);
-  }, cls, 'Wallpaper preview');
+    if (!cfg) return;
+    const f = opts.fold?.(), card = opts.card?.() ?? true;
+    if (f) drawFoldWallpaper(ctx, cfg, codesFor(cfg), getPhoto(), f[0], f[1], w, h, { card });
+    else drawWallpaper(ctx, cfg, codesFor(cfg), getPhoto(), w, h, { card });
+  }, cls, opts.label || 'Wallpaper preview');
   const clockLabel = h('span', {}), dockLabel = h('span', {});
   const clock = h('i', { class: 'g-band g-clock' }, clockLabel);
   const dock = h('i', { class: 'g-band g-dock' }, dockLabel);
   let shownFor = null;
   const guides = h('div', { class: 'guides', 'aria-hidden': 'true', hidden: true }, clock, dock);
-  const frame = h('div', { class: 'wall-frame' }, c, guides);
+  const strip = h('i', { class: 'fold-strip', 'aria-hidden': 'true', hidden: true });
+  const frame = h('div', { class: 'wall-frame' }, c, guides, strip);
   const box = h('div', { class: 'wall-fit' }, frame);
   let bw = 0, bh = 0;
   const fit = () => {
@@ -50,7 +57,15 @@ export function wallpaperCanvas(getCfg, getPhoto, getSize, cls = 'wall-canvas', 
     c.classList.toggle('landscape', w > hh);
   };
   const paintGuides = () => {
-    const screen = opts.guides?.() || null;
+    // A foldable's open view: outline what the closed screen shows; the guides belong to that one.
+    const f = opts.fold?.();
+    const open = f && f[1] === 'OPEN';
+    strip.hidden = !open;
+    if (open) {
+      const st = foldStrip(f[0]);
+      Object.assign(strip.style, { left: `${st.x / f[0].openW * 100}%`, top: `${st.y / f[0].openH * 100}%`, width: `${st.w / f[0].openW * 100}%`, height: `${st.h / f[0].openH * 100}%` });
+    }
+    const screen = open ? null : opts.guides?.() || null;
     guides.hidden = !screen;
     const cfg = getCfg();
     if (!screen || !cfg) return;
@@ -60,7 +75,7 @@ export function wallpaperCanvas(getCfg, getPhoto, getSize, cls = 'wall-canvas', 
       clock.style.height = `${g.clockEnd * 100}%`; dock.style.top = `${g.dockStart * 100}%`;
       clockLabel.textContent = `${g.short} · ${g.top.toUpperCase()}`; dockLabel.textContent = `${g.short} · ${g.bottom.toUpperCase()}`;
     }
-    const [w, hh] = getSize();
+    const [w, hh] = f ? [f[0].closedW, f[0].closedH] : getSize();
     const o = cardOverlaps(cfg, w, hh, screen);
     clock.classList.toggle('hit', o.clock); dock.classList.toggle('hit', o.dock);
   };

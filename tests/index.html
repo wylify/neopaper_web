@@ -21,9 +21,10 @@
     import { plan } from '../js/capacity.js';
     import { code128Widths } from '../js/code128.js';
     import { cardCodes } from '../js/codes.js';
-    import { newCard, toJson, fromJson, templates, payload, unitSize, cloneCard, makeRow } from '../js/model.js';
+    import { newCard, toJson, fromJson, templates, payload, unitSize, cloneCard, makeRow, homeOnly } from '../js/model.js';
+    import { foldFrom, foldStrip } from '../js/fold.js';
     import { suggestInk, suggestBackdrop, contrast, INK_TARGET, toHsv, fromHsv } from '../js/colors.js';
-    import { drawWallpaper, drawCard, microText, cardGeometry, hitTarget, targetRect } from '../js/render.js';
+    import { drawWallpaper, drawCard, microText, cardGeometry, hitTarget, targetRect, photoRect } from '../js/render.js';
     import { cardOverlaps, cardPlacement, fitBetweenGuides, isSmallSquarish } from '../js/placement.js';
 
     const ZX = window.ZXingWASM;
@@ -202,6 +203,68 @@
       ok(suggestBackdrop(0xFFFF6A13 | 0).length > 0);
     });
     await test('HSV round trip', () => { for (const c of [0xFFFF6A13, 0xFF123456, 0xFFFFFFFF, 0xFF000000].map((x) => x | 0)) eq(fromHsv(...toHsv(c)), c); });
+
+    // ── Photo framing (PhotoFramingTest.kt) ──
+    const near = (a, b, m = '') => { if (Math.abs(a - b) > 0.01) throw new Error(`${m} expected ${b}, got ${a}`); };
+    await test('unframed photo is centre-cropped', () => {
+      const r = photoRect(newCard(), 2000, 1000, { x: 0, y: 0, w: 1080, h: 2400 });
+      near(r.h, 2400); near(r.w, 4800); near(r.x, -(4800 - 1080) / 2); near(r.y, 0);
+    });
+    await test('framing ±1 reaches each edge of the photo', () => {
+      const vp = { x: 0, y: 0, w: 1080, h: 2400 };
+      near(photoRect(newCard({ photoX: -1 }), 2000, 1000, vp).x, 0, 'left');
+      const r = photoRect(newCard({ photoX: 1 }), 2000, 1000, vp); near(r.x + r.w, 1080, 'right');
+      const z = photoRect(newCard({ photoZoom: 2, photoY: 1 }), 2000, 1000, vp); near(z.y + z.h, 2400, 'bottom');
+    });
+    await test('every framing covers the screen', () => {
+      const vp = { x: 0, y: 0, w: 1080, h: 2400 };
+      for (const zoom of [1, 1.7, 5]) for (const x of [-1, 0, 0.4, 1]) for (const y of [-1, 0.3, 1]) {
+        const r = photoRect(newCard({ photoZoom: zoom, photoX: x, photoY: y }), 1600, 1200, vp);
+        ok(r.x <= 0.01 && r.y <= 0.01 && r.x + r.w >= 1079.99 && r.y + r.h >= 2399.99, JSON.stringify([zoom, x, y, r]));
+      }
+    });
+    await test('framing follows the viewport', () => {
+      const r = photoRect(newCard(), 1000, 1000, { x: 100, y: 50, w: 500, h: 500 });
+      near(r.x, 100); near(r.y, 50); near(r.w, 500);
+    });
+    await test('home half drops the overlay only when asked', () => {
+      eq(homeOnly(newCard({ overlay: 'GRID' })).overlay, 'GRID');
+      eq(homeOnly(newCard({ overlay: 'GRID', homeOverlay: false })).overlay, 'NONE');
+    });
+    await test('framing and dual survive JSON, out-of-range values clamp', () => {
+      const c = fromJson(JSON.parse(JSON.stringify(toJson(newCard({ photoZoom: 2.5, photoX: -0.4, photoY: 0.8, dual: true, homeOverlay: false })))));
+      eq([c.photoZoom, c.photoX, c.photoY, c.dual, c.homeOverlay], [2.5, -0.4, 0.8, true, false]);
+      const d = fromJson({ photoZoom: 99, photoX: -7, photoY: 'x' });
+      eq([d.photoZoom, d.photoX, d.photoY, d.dual, d.homeOverlay], [5, -1, 0, false, true]);
+    });
+
+    // ── Foldables (FoldTest.kt) ──
+    await test('Pixel Fold emulator: cover screen pairs with the inner screen', () => {
+      const g = foldFrom([[1080, 2364], [2076, 2152]]);
+      eq(g, { closedW: 1080, closedH: 2364, openW: 2076, openH: 2152 });
+      const s = foldStrip(g);
+      near(s.h, 2152); near(s.w, 2152 * 1080 / 2364); near(s.x + s.w / 2, 1038);
+    });
+    await test('landscape inner screen keeps its orientation', () => {
+      const g = foldFrom([[1080, 2092], [2208, 1840]]);
+      eq(g, { closedW: 1080, closedH: 2092, openW: 2208, openH: 1840 });
+      near(foldStrip(g).h, 1840);
+    });
+    await test('sizes read in landscape turn together', () => {
+      eq(foldFrom([[2364, 1080], [2152, 2076]]), { closedW: 1080, closedH: 2364, openW: 2076, openH: 2152 });
+    });
+    await test('phones, flips and tablets are not folds', () => {
+      eq(foldFrom([[1080, 2400]]), null); eq(foldFrom([[2560, 1600]]), null);
+      eq(foldFrom([[1080, 2640], [720, 748]]), null);
+    });
+    await test('dual home half draws no card', () => {
+      const c = document.createElement('canvas'); c.width = 270; c.height = 600;
+      const x = c.getContext('2d'), t = newCard();
+      const info = drawWallpaper(x, t, cardCodes(payload(t.qr), t.barcodeLink), null, 270, 600, { card: false });
+      eq(info, null);
+      const px = x.getImageData(135, 300, 1, 1).data; // the card's centre: still the backdrop colour
+      eq([px[0], px[1], px[2]], [0xE7, 0xE6, 0xE2]);
+    });
 
     // ── Rendering: a rendered card scans ──
     await document.fonts.ready;

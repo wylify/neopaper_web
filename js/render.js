@@ -2,7 +2,7 @@
 // render/WallpaperRenderer.kt. Layout happens in card units (a 3:4 card is 300×400) and is scaled
 // once, so previews, thumbnails and a 4K export are the same design.
 import { cardPlacement } from './placement.js';
-import { FIELD_ICONS, SYMBOLS, ROW_KINDS, rowHeight, unitSize, css } from './model.js';
+import { FIELD_ICONS, SYMBOLS, ROW_KINDS, rowHeight, unitSize, css, PHOTO_ZOOM_RANGE } from './model.js';
 import { luminance } from './colors.js';
 
 // ── Glyphs, parsed once ────────────────────────────────────────────────────────────────
@@ -558,57 +558,69 @@ const rgba = (c, a) => `rgba(${(c >>> 16) & 255},${(c >>> 8) & 255},${c & 255},$
 /**
  * Draws the whole wallpaper into a W×H area of [ctx]. [photo]: { full, blurred, mono() } or null.
  * Used for the live preview and the export — same code, same result.
+ * opts (all optional, as WallpaperRenderer.kt):
+ *  - card: false draws the backdrop alone (the home half of a dual wallpaper)
+ *  - backdrop: false draws the card alone on a clear canvas (the photo framer's still top layer)
+ *  - viewport: { x, y, w, h }, the part the card is laid out for (a foldable's closed-screen strip)
+ *  - photoFrame: { x, y, w, h } the photo is framed for; the viewport unless given
  */
-export function drawWallpaper(ctx, cfg, codes, photo, W, H) {
-  const short = Math.min(W, H);
+export function drawWallpaper(ctx, cfg, codes, photo, W, H, opts = {}) {
+  const vp = opts.viewport || { x: 0, y: 0, w: W, h: H };
+  const short = Math.min(vp.w, vp.h);
   const u = short / 390; // one CSS px of the 390-wide design
 
   const isPhoto = cfg.bgMode === 'PHOTO';
-  ctx.fillStyle = isPhoto ? '#1B1B21' : css(cfg.bgColor);
-  ctx.fillRect(0, 0, W, H);
-  if (isPhoto && photo) {
-    const img = cfg.photoEffect === 'BLUR' ? photo.blurred : cfg.photoEffect === 'MONO' ? photo.mono() : photo.full;
-    const iw = img.width, ih = img.height;
-    const scale = Math.max(W / iw, H / ih); // centre-crop
-    const sw = W / scale, sh = H / scale;
-    ctx.save();
-    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(img, (iw - sw) / 2, (ih - sh) / 2, sw, sh, 0, 0, W, H);
-    ctx.restore();
-  } else if (isPhoto) {
-    // No photo yet: hatched placeholder.
-    const p = new Path2D();
-    for (let x = -H; x < W; x += 14 * u) { p.moveTo(x, H); p.lineTo(x + H, 0); }
-    stroke(ctx, p, 'rgba(255,255,255,0.06)', 2 * u);
-  }
-  if (isPhoto) { ctx.fillStyle = `rgba(0,0,0,${Math.min(0.9, Math.max(0, cfg.photoDim))})`; ctx.fillRect(0, 0, W, H); }
-
   const light = !isPhoto && luminance(cfg.bgColor) > 0.45;
   const lc = light ? 0x141414 : 0xFFFFFF;
-  if (cfg.overlay !== 'NONE') {
-    const p = new Path2D();
-    let a = 0.1;
-    if (cfg.overlay === 'SCANLINES') for (let y = 0; y < H; y += 3 * u) p.rect(0, y, W, u);
-    else if (cfg.overlay === 'GRID') {
-      const step = 32 * u;
-      for (let x = 0; x < W; x += step) p.rect(x, 0, u, H);
-      for (let y = 0; y < H; y += step) p.rect(0, y, W, u);
-      // Crossings are covered twice; fill with nonzero so they don't get darker.
-    } else if (cfg.overlay === 'DOTS') {
-      a = 0.22; const step = 14 * u;
-      for (let y = step / 2; y < H; y += step) for (let x = step / 2; x < W; x += step) { p.moveTo(x + u, y); p.arc(x, y, u, 0, Math.PI * 2); }
-    } else if (cfg.overlay === 'HUD') {
-      a = 0.25; p.rect(W / 2 - u / 2, 0, u, H); p.rect(0, H / 2 - u / 2, W, u);
+  if (opts.backdrop !== false) {
+    ctx.fillStyle = isPhoto ? '#1B1B21' : css(cfg.bgColor);
+    ctx.fillRect(0, 0, W, H);
+    if (isPhoto && photo) {
+      const img = cfg.photoEffect === 'BLUR' ? photo.blurred : cfg.photoEffect === 'MONO' ? photo.mono() : photo.full;
+      const r = photoRect(cfg, photo.full.width, photo.full.height, opts.photoFrame || vp);
+      ctx.save();
+      ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+      // A soft fill wherever the photo runs out (it is framed for the visible screen).
+      if (r.x > 0.5 || r.y > 0.5 || r.x + r.w < W - 0.5 || r.y + r.h < H - 0.5) {
+        const b = photo.blurred, f = Math.max(W / b.width, H / b.height);
+        ctx.drawImage(b, (W - b.width * f) / 2, (H - b.height * f) / 2, b.width * f, b.height * f);
+      }
+      ctx.drawImage(img, r.x, r.y, r.w, r.h);
+      ctx.restore();
+    } else if (isPhoto) {
+      // No photo yet: hatched placeholder.
+      const p = new Path2D();
+      for (let x = -H; x < W; x += 14 * u) { p.moveTo(x, H); p.lineTo(x + H, 0); }
+      stroke(ctx, p, 'rgba(255,255,255,0.06)', 2 * u);
     }
-    ctx.fillStyle = rgba(lc, a); ctx.fill(p);
+    if (isPhoto) { ctx.fillStyle = `rgba(0,0,0,${Math.min(0.9, Math.max(0, cfg.photoDim))})`; ctx.fillRect(0, 0, W, H); }
+
+    if (cfg.overlay !== 'NONE') {
+      const p = new Path2D();
+      let a = 0.1;
+      if (cfg.overlay === 'SCANLINES') for (let y = 0; y < H; y += 3 * u) p.rect(0, y, W, u);
+      else if (cfg.overlay === 'GRID') {
+        const step = 32 * u;
+        for (let x = 0; x < W; x += step) p.rect(x, 0, u, H);
+        for (let y = 0; y < H; y += step) p.rect(0, y, W, u);
+        // Crossings are covered twice; fill with nonzero so they don't get darker.
+      } else if (cfg.overlay === 'DOTS') {
+        a = 0.22; const step = 14 * u;
+        for (let y = step / 2; y < H; y += step) for (let x = step / 2; x < W; x += step) { p.moveTo(x + u, y); p.arc(x, y, u, 0, Math.PI * 2); }
+      } else if (cfg.overlay === 'HUD') {
+        a = 0.25; p.rect(W / 2 - u / 2, 0, u, H); p.rect(0, H / 2 - u / 2, W, u);
+      }
+      ctx.fillStyle = rgba(lc, a); ctx.fill(p);
+    }
   }
 
   // ── Card ──
+  if (opts.card === false) return null;
   const [cw, ch] = unitSize(cfg);
-  const place = cardPlacement(cfg, W, H); // shared with the clock/dock guides
+  const place = cardPlacement(cfg, vp.w, vp.h); // shared with the clock/dock guides
   const cardW = place.width;
   const k = cardW / cw, cardH = ch * k;
-  const cx = place.cx, cy = place.cy;
+  const cx = vp.x + place.cx, cy = vp.y + place.cy;
   const tlx = cx - cardW / 2, tly = cy - cardH / 2;
 
   ctx.save();
@@ -630,6 +642,19 @@ export function drawWallpaper(ctx, cfg, codes, photo, W, H) {
   const info = drawCard(ctx, cfg, codes, tlx, tly, cardW);
   ctx.restore();
   return info;
+}
+
+/**
+ * Where an iw×ih photo lands for [cfg]'s framing: it fills [vp] at zoom 1, and photoX/photoY slide
+ * the screen across the slack the zoom leaves, so every framing stays covered edge to edge.
+ * Same maths as photoRect in WallpaperRenderer.kt. Returns { x, y, w, h }.
+ */
+export function photoRect(cfg, iw, ih, vp) {
+  const c = (v, lo, hi, d) => (Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d);
+  const s = Math.max(vp.w / iw, vp.h / ih) * c(cfg.photoZoom, PHOTO_ZOOM_RANGE[0], PHOTO_ZOOM_RANGE[1], 1);
+  const dw = iw * s, dh = ih * s;
+  const sx = (dw - vp.w) / 2, sy = (dh - vp.h) / 2;
+  return { x: vp.x - sx - c(cfg.photoX, -1, 1, 0) * sx, y: vp.y - sy - c(cfg.photoY, -1, 1, 0) * sy, w: dw, h: dh };
 }
 
 /** Card size in output px for an export, as the readout in the Export tab shows it. */

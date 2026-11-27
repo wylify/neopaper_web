@@ -15,8 +15,14 @@ Everything the Android app does, except setting the wallpaper directly (see belo
 - Cards, templates, duplicate and delete (with undo)
 - Builder tabs (one sliding pill in the top bar): **Card**, edited on the card itself or as a row list (switch on the
   Card tab or in Settings), **Style** (ratio, orientation,
-  corners, colours with contrast-safe suggestions), **Backdrop** (colour or photo, dim, mono/blur, overlays,
-  size/nudge/tilt, crop marks), **Export** (device presets, custom size, 1–3× scale, PNG/JPG)
+  corners, colours with contrast-safe suggestions), **Backdrop** (resolution dialog: this device, presets or a
+  custom size; colour or photo, move/zoom the photo in a full-screen framer, dim, mono/blur, overlays,
+  size/nudge/tilt, crop marks), **Export** (single or dual wallpaper, overlay on home, 1–3× scale, PNG/JPG)
+- **Dual wallpaper**: the card on the lock screen and the backdrop alone on home (with or without the overlay). Both
+  images are saved, side by side in the Export preview, with steps for setting each screen.
+- **Foldables** (Android): once NEOPAPER has been opened on both screens of a book-style fold, it makes one
+  open-screen picture with the closed screen's wallpaper at the centre (Settings › Foldable layout, on by default).
+  The Backdrop and Export previews switch between the closed and open screen.
 - **On the card** (default, like the Android app): tap the header, QR, a row or the barcode to select it (a marching
   dashed frame), tap a text again to type straight on the card in its own font, with ↑/↓ or Enter/Tab to move
   between texts. The panel under the card (beside it on wide windows) holds the selected part's settings; remove and
@@ -58,6 +64,8 @@ Cards use the same JSON as the Android app, and NP1 encoding is a port of `Np1.k
 | Saved images | `Pictures/NEOPAPER` | Downloads (Android, desktop) or Photos via the share sheet (iPhone) |
 | Largest export | 48 MP | 16 MP on iPhone/iPad (Safari's canvas limit), 33 MP on other phones, 48 MP on desktop |
 | “This device” size | Exact screen | Screen size × pixel ratio, which can be off by a few pixels on some Android phones |
+| Dual wallpaper | Sets both screens | Saves two images (`_lock`, `_home`); the user sets each screen |
+| Foldable detection | Both screens read from the system | Learned: the app has to be opened once folded and once unfolded |
 | Storage | App storage | IndexedDB in the browser. Safari may clear it after 7 days without a visit unless the app is on the Home Screen. Keep a backup. |
 | Torch | Yes | Where the browser supports it (Chrome on Android) |
 | Card tab | Edit by tapping the card itself | Same, plus a row-list layout to switch to |

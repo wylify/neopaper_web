@@ -3,8 +3,9 @@ import { vibrate, settings, setSettings, validSettings, ORIENTATIONS, CARD_EDITO
 import { pushLayer, pop, isTop } from './nav.js';
 import { h, icon, I, outline, primary, sectionLabel, tag, toast, segmented, switchRow } from './ui.js';
 import { S, subscribe, createCard, deleteCard, undoDelete, flush } from './state.js';
-import { templates, ratioLabel, css, toJson, fromJson, cloneCard, RATIOS, DEVICE, DEVICE_PRESETS } from './model.js';
-import { deviceSize } from './export.js';
+import { templates, ratioLabel, css, toJson, fromJson, cloneCard, RATIOS, DEVICE, FOLD, DEVICE_PRESETS } from './model.js';
+import { deviceSize, activeFold } from './export.js';
+import { deviceFold } from './fold.js';
 import { cardCanvas } from './previews.js';
 import { openSheet } from './sheet.js';
 import { putPhoto, isPersisted, persist } from './store.js';
@@ -137,7 +138,9 @@ export function homeScreen(nav) {
     const orient = segmented(Object.keys(ORIENTATIONS), settings.orientation, (v) => ORIENTATIONS[v], (v) => { setSettings({ orientation: v }); paintOrient(); });
     // Saved image defaults for new cards.
     const [dw, dh] = deviceSize();
-    const presets = [{ id: DEVICE, name: 'This device', w: dw, h: dh }, ...DEVICE_PRESETS];
+    const af = activeFold();
+    const presets = [{ id: DEVICE, name: af ? 'This device · closed screen' : 'This device', w: dw, h: dh },
+      ...(af ? [{ id: FOLD, name: 'This foldable · open + closed', w: af.openW, h: af.openH }] : []), ...DEVICE_PRESETS];
     const list = h('div', { class: 'radio-list', role: 'radiogroup', 'aria-label': 'Image size for new cards' }, presets.map((p) => h('button', {
       type: 'button', role: 'radio', class: 'radio-item', 'aria-checked': String(settings.exportPreset === p.id),
       onclick: () => { setSettings({ exportPreset: p.id }); list.querySelectorAll('.radio-item').forEach((b, i) => b.setAttribute('aria-checked', String(presets[i].id === p.id))); },
@@ -158,6 +161,9 @@ export function homeScreen(nav) {
       h('p', { class: 'title' }, 'Clock and dock guides'),
       guidesPicker(),
       h('p', { class: 'body muted' }, 'Mark where the home screen (status bar, At a Glance, dock) or the lock screen (large clock, shortcuts) draws over the wallpaper preview. Off by default; also on the card’s Backdrop tab.'),
+      // Only on a book-style foldable, once both screens have been seen.
+      deviceFold() ? switchRow('Foldable layout', 'Wallpapers for both screens: the open screen shows the whole picture, the closed screen its centre with the card',
+        settings.foldLayout, (v) => { setSettings(v ? { foldLayout: true } : { foldLayout: false, ...(settings.exportPreset === FOLD ? { exportPreset: DEVICE } : {}) }); render(); }) : null,
       switchRow('Haptics', 'Vibrate when dragging, reordering and scanning (where the browser supports it)', settings.haptics, (v) => setSettings({ haptics: v })),
       installBlock,
       sectionLabel('Storage'),
@@ -214,7 +220,7 @@ function longPress(el, fn) {
 
 const BACKUP_SETTINGS = ['ratio', 'orientation', 'exportPreset', 'exportScale', 'exportPng', 'guidesOn', 'guideScreen', 'haptics', 'cardEditor'];
 /** The user's own photos stay on this device: such cards come back with their colour background. */
-const withoutPhoto = (o) => (o.photoUri == null && o.bgMode === 'COLOR' ? o : { ...o, photoUri: null, bgMode: 'COLOR' });
+const withoutPhoto = (o) => (o.photoUri == null && o.bgMode === 'COLOR' ? o : { ...o, photoUri: null, bgMode: 'COLOR', photoZoom: 1, photoX: 0, photoY: 0 });
 
 async function exportBackup() {
   await flush();

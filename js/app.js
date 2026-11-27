@@ -5,6 +5,7 @@ import { S, init, openCard, createCard, flush, subscribe, setEditingCheck, selec
 import { ROW_KINDS } from './model.js';
 import { initHistory, pushLayer, pop, popTo, depth } from './nav.js';
 import { resetTextCache } from './render.js';
+import { watchScreens } from './fold.js';
 import { homeScreen } from './home.js';
 import { builderScreen } from './builder.js';
 import { addRowSheet, rowEditorScreen, codesScreen } from './editors.js';
@@ -117,6 +118,7 @@ addEventListener('keydown', (e) => {
 
 async function start() {
   initHistory();
+  watchScreens(); // foldables: learns the closed and open screen sizes
   setEditingCheck(() => screens.length > 1);
   // Canvas text needs the real fonts: wait for them (briefly) before the first paint.
   const fonts = Promise.all(['700 46px "Space Grotesk"', '500 13px "Space Grotesk"', '600 8px "JetBrains Mono"', '400 8px "JetBrains Mono"', '700 8px "JetBrains Mono"',

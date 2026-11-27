@@ -7,14 +7,19 @@ import { guidesPicker } from './home.js';
 import { h, icon, I, iconButton, primary, outline, sectionLabel, tag, hint, segmented, chipGroup, switchRow, slider, textField, toast, busy, nextPaint, zoomPan } from './ui.js';
 import { S, draft, edit, subscribe, select, removeRow, undoRemove, moveRow, setPhotoBlob, flush, undo, redo, canUndo, canRedo, clearHistory } from './state.js';
 import {
-  RATIOS, ratioLabel, CORNERS, COLOR_PRESETS, BACKGROUND_COLORS, OVERLAYS, PHOTO_EFFECTS, DEVICE, CUSTOM, DEVICE_PRESETS,
-  ROW_KINDS, FIELD_ICONS, isField, rowHeight, qrSummary, unitSize, css,
+  RATIOS, ratioLabel, CORNERS, COLOR_PRESETS, BACKGROUND_COLORS, OVERLAYS, PHOTO_EFFECTS, DEVICE, CUSTOM, FOLD, DEVICE_PRESETS,
+  ROW_KINDS, FIELD_ICONS, isField, rowHeight, qrSummary, unitSize, css, PHOTO_ZOOM_RANGE, photoFramed, resetFraming, homeOnly,
 } from './model.js';
 import { suggestInk, suggestBackdrop, contrast, INK_TARGET, BACKDROP_TARGET, luminance } from './colors.js';
 import { cardCanvas, wallpaperCanvas, rowSwatch } from './previews.js';
 import { colorWell, suggestedSwatches, colorPickerDialog } from './colorpicker.js';
 import { openSheet } from './sheet.js';
-import { deviceSize, targetSize, exportSize, renderImage, fileName, download, shareFile, canShareFile, isIos, isMobile, wallpaperSteps, MAX_PIXELS } from './export.js';
+import {
+  deviceSize, targetSize, exportSize, renderImage, fileName, download, shareFiles, canShareFiles, isIos, isMobile, wallpaperSteps, MAX_PIXELS,
+  activeFold, foldFor, wallpaperSize, wallpaperFold, cardArea,
+} from './export.js';
+import { foldSize, onFoldChange, FOLD_VIEWS } from './fold.js';
+import { openPhotoFramer } from './framer.js';
 import { prepareFile } from './photo.js';
 import { barcode } from './codes.js';
 import { cardPx, WARNING_PATH } from './render.js';
@@ -56,7 +61,8 @@ export function rowGlyph(cfg, r, color = cfg ? cfg.labelColor : 0, bg = null) {
 export function builderScreen(nav) {
   let tab = S.builderTab;
   let fit = { shown: 0, total: 0 };
-  const dev = deviceSize();
+  // This screen (the closed one on a foldable); re-read when a fold is first detected.
+  let dev = deviceSize();
   // History entries below this builder: the ← button always goes straight back to the cards.
   const base = depth();
   const cardMode = () => settings.cardEditor === 'CARD';
@@ -69,12 +75,27 @@ export function builderScreen(nav) {
   const liveEl = h('span', { class: 'stage-note left mono-small' });
   const fitEl = h('button', { type: 'button', class: 'stage-note right mono-small' });
   const card = cardCanvas(draft, (info) => { fit = info; paintFit(); }, 'stage-card');
-  const wall = wallpaperCanvas(draft, () => S.photo, () => (tab === 3 ? targetSize(draft()) : dev), 'stage-wall', { guides: () => (tab >= 2 ? guides() : null) });
+  // Foldables: which screen the wallpaper preview shows. Follows the resolution until toggled.
+  let foldView = 'CLOSED', foldViewFor = null;
+  const stageFold = () => { const f = foldFor(draft()); return f ? [f[0], foldView] : null; };
+  const stageSize = () => { const f = stageFold(); return f ? foldSize(f[0], f[1]) : targetSize(draft()); };
+  const dualPair = () => tab === 3 && !!draft()?.dual;
+  const wall = wallpaperCanvas(draft, () => S.photo, stageSize, 'stage-wall',
+    { guides: () => (tab >= 2 ? guides() : null), fold: stageFold, label: 'Wallpaper preview' });
+  // Export with dual on: the home half (backdrop alone) beside the lock one.
+  const wallHome = wallpaperCanvas(() => { const c = draft(); return c && homeOnly(c); }, () => S.photo, stageSize, 'stage-wall',
+    { fold: stageFold, card: () => false, label: 'Home screen wallpaper preview' });
+  wallHome.classList.add('stage-home');
+  wall.dataset.cap = 'LOCK'; wallHome.dataset.cap = 'HOME';
+  const foldBtns = FOLD_VIEWS.map((v) => h('button', { type: 'button', role: 'radio', 'aria-label': `${v.toLowerCase()} screen preview`, onclick: () => { foldView = v; refresh(); } }, v));
+  const foldToggle = h('div', { class: 'fold-toggle', role: 'radiogroup', 'aria-label': 'Foldable preview', hidden: true }, foldBtns);
   // Backdrop: the card runs under this screen's clock or dock. Tap to fit it between them.
   const placeText = h('span', {});
   const placeBadge = h('button', { type: 'button', class: 'place-badge', hidden: true, onclick: () => fitToScreen() },
     icon(I.warning, { size: 14, stroke: 2.6 }), placeText);
-  const fitToScreen = () => edit((x) => fitBetweenGuides(x, dev[0], dev[1], settings.guideScreen));
+  /** The screen the card is placed on: the target size, or a foldable's closed screen (its strip). */
+  const placeSize = (c) => { const f = foldFor(c); return f ? foldSize(f[0], 'CLOSED') : targetSize(c); };
+  const fitToScreen = () => edit((x) => fitBetweenGuides(x, ...placeSize(x), settings.guideScreen));
   // The tab bar can fold away on any screen: back, preview and the toggle then float on the stage
   // and the edit mode sits above the card.
   const modeEl = h('p', { class: 'stage-mode mono-label' });
@@ -104,8 +125,8 @@ export function builderScreen(nav) {
     if (cardMode()) select(c.rows[fit.shown]?.id ?? null);
     setTab(0);
   });
-  const stageInner = h('div', { class: 'stage-inner' }, card, wall);
-  const stage = h('div', { class: 'stage dots builder-stage' }, stageInner, liveEl, fitEl, placeBadge, stageCtl, handle);
+  const stageInner = h('div', { class: 'stage-inner' }, card, wall, wallHome);
+  const stage = h('div', { class: 'stage dots builder-stage' }, stageInner, liveEl, fitEl, placeBadge, foldToggle, stageCtl, handle);
   wireStageHandle();
 
   const pane = h('div', { class: 'pane', role: 'tabpanel' });
@@ -207,11 +228,16 @@ export function builderScreen(nav) {
     el.classList.toggle('bar-hidden', hide);
   }
 
+  let setBtn = null;
   function renderActions() {
+    setBtn = null;
     const add = () => openAddRow(false);
     actions.hidden = false; el.classList.remove('bar-hidden');
     if (tab === 0) actions.replaceChildren(outline('Add row', add, { icon: I.plus }), primary('Next: Style', () => setTab(1), { icon: I.next }));
-    else if (tab === 3) actions.replaceChildren(outline('Save image', () => saveImage(false), { icon: I.download }), primary('Set as wallpaper', () => saveImage(true), { class: 'wide' }));
+    else if (tab === 3) {
+      setBtn = primary(draft()?.dual ? 'Set wallpapers' : 'Set as wallpaper', () => saveImage(true), { class: 'wide' });
+      actions.replaceChildren(outline('Save image', () => saveImage(false), { icon: I.download }), setBtn);
+    }
     else actions.replaceChildren(outline('Back', () => setTab(tab - 1)), primary(`Next: ${TABS[tab + 1]}`, () => setTab(tab + 1), { class: 'wide' }));
   }
 
@@ -273,13 +299,21 @@ export function builderScreen(nav) {
     const c = draft();
     if (!c) return;
     // The card's name lives on the stage now that the top bar holds the tabs.
-    liveEl.textContent = tab < 2 ? stageLabel(c) : tab === 3 ? `${targetSize(c).join(' × ')}` : 'THIS DEVICE';
+    // Foldables: the preview follows the resolution (open for "This foldable") until toggled.
+    if (foldViewFor !== c.exportPreset) { foldViewFor = c.exportPreset; foldView = c.exportPreset === FOLD ? 'OPEN' : 'CLOSED'; }
+    const sf = stageFold();
+    foldToggle.hidden = tab < 2 || !sf;
+    foldBtns.forEach((b, i) => b.setAttribute('aria-checked', String(FOLD_VIEWS[i] === foldView)));
+    const ss = stageSize();
+    liveEl.textContent = tab < 2 ? stageLabel(c) : ss.join(' × ');
     liveEl.hidden = !!editApi; // the editor has its own label
+    stageInner.classList.toggle('pair', dualPair());
+    if (setBtn) setBtn.querySelector('span').textContent = c.dual ? 'Set wallpapers' : 'Set as wallpaper';
     if (editApi) { fitEl.hidden = true; }
-    else if (tab < 2) { card.sync(); fitEl.hidden = false; } else { wall.sync(); fitEl.hidden = true; }
+    else if (tab < 2) { card.sync(); fitEl.hidden = false; } else { wall.sync(); if (dualPair()) wallHome.sync(); fitEl.hidden = true; }
     // Backdrop: the card runs under the clock or dock of the screen the guides follow. Tap to fit.
     const gs = guides();
-    const o = gs ? cardOverlaps(c, dev[0], dev[1], gs) : { clock: false, dock: false };
+    const o = gs ? cardOverlaps(c, ...placeSize(c), gs) : { clock: false, dock: false };
     placeBadge.hidden = tab !== 2 || !overlapsAny(o);
     if (gs && overlapsAny(o)) {
       const t = overlapText(o, gs), g = guideScreen(gs);
@@ -456,8 +490,14 @@ export function builderScreen(nav) {
 
     const thumb = h('img', { class: 'photo-thumb', alt: 'Selected photo', hidden: true });
     const pickLabel = h('span', {}, 'Choose a photo');
+    // Framing: the full-screen framer, a reset, and the zoom on its own.
+    const resetBtn = outline('Reset', () => edit((x) => resetFraming(x)), { class: 'reset' });
+    const photoBtns = h('div', { class: 'photo-btns' }, outline('Move & zoom', () => frame(), { icon: I.image }), resetBtn);
+    const zoom = slider('Zoom', c.photoZoom, PHOTO_ZOOM_RANGE[0], PHOTO_ZOOM_RANGE[1], 0.01, (v) => `${Math.round(v * 100)}%`,
+      (v) => edit((x) => ({ ...x, photoZoom: v < 1.02 ? 1 : v }), 'photoZoom'));
     const photoBox = h('div', { class: 'stack' },
       h('div', { class: 'row' }, thumb, h('button', { type: 'button', class: 'pick-photo', onclick: () => fileInput.click() }, icon(I.image, { size: 22 }), pickLabel)), fileInput,
+      photoBtns, zoom,
       slider('Dim', c.photoDim, 0, 0.8, 0.01, (v) => `${Math.round(v * 100)}%`, (v) => edit((x) => ({ ...x, photoDim: v }))),
       h('div', { class: 'inline' }, h('span', { class: 'title w64' }, 'Effect'),
         chipGroup(Object.keys(PHOTO_EFFECTS), c.photoEffect, (v) => PHOTO_EFFECTS[v], (v) => edit((x) => ({ ...x, photoEffect: v })))));
@@ -480,7 +520,20 @@ export function builderScreen(nav) {
       colorPickerDialog('Backdrop colour', x.bgColor, x.labelColor, BACKDROP_TARGET, suggestBackdrop(x.labelColor), (v) => edit((y) => ({ ...y, bgColor: v, bgMode: 'COLOR' })));
     }
 
-    const el = h('div', { class: 'stack' }, mode, colorBox, photoBox, sectionLabel('Overlay', 'mt'), overlays,
+    const resName = h('span', { class: 'sub' }), resSize = h('span', { class: 'mono-small' });
+    const resRow = h('button', { type: 'button', class: 'res-row', 'aria-haspopup': 'dialog', onclick: () => resolutionDialog() },
+      h('span', { class: 'grow' }, h('span', { class: 'title' }, 'Resolution'), resName), resSize, icon(I.next, { size: 16, color: 'var(--muted)' }));
+
+    function frame() {
+      const x = draft(), p = S.photo;
+      if (!x || !p) return;
+      // Foldables: the photo is framed for the whole open picture, the closed screen outlined.
+      const f = foldFor(x)?.[0] || null;
+      const [w, hh] = f ? [f.openW, f.openH] : targetSize(x);
+      openPhotoFramer({ cfg: x, photo: p, w, h: hh, fold: f, onDone: (z, px, py) => edit((y) => ({ ...y, photoZoom: z, photoX: px, photoY: py })) });
+    }
+
+    const el = h('div', { class: 'stack' }, resRow, mode, colorBox, photoBox, sectionLabel('Overlay', 'mt'), overlays,
       sectionLabel('Placement', 'mt'), h('div', { class: 'inline' }, h('span', { class: 'title w64' }, 'Guides'), guidesPicker()), warn, size, nudge, tilt, crop);
 
     let thumbFor = null;
@@ -492,8 +545,16 @@ export function builderScreen(nav) {
       sugg.update(suggestBackdrop(x.labelColor), x.bgColor, x.labelColor);
       overlays.querySelectorAll('.overlay-tile').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.o === x.overlay)));
       size.set(x.cardSize); nudge.set(x.nudge); tilt.set(x.tilt);
+      const [tw, th] = targetSize(x);
+      resName.textContent = presetName(x.exportPreset);
+      resSize.textContent = `${tw} × ${th}`;
+      resSize.classList.toggle('match', tw === dev[0] && th === dev[1]);
+      resRow.setAttribute('aria-label', `Resolution: ${presetName(x.exportPreset)}, ${tw} by ${th}. Change`);
+      zoom.set(x.photoZoom);
+      resetBtn.hidden = !photoFramed(x);
+      photoBtns.hidden = zoom.hidden = !S.photo;
       const gs = guides();
-      const o = gs ? cardOverlaps(x, dev[0], dev[1], gs) : { clock: false, dock: false };
+      const o = gs ? cardOverlaps(x, ...placeSize(x), gs) : { clock: false, dock: false };
       warn.hidden = !overlapsAny(o);
       if (gs) {
         const g = guideScreen(gs);
@@ -518,36 +579,39 @@ export function builderScreen(nav) {
 
   function exportTab() {
     const c = draft();
-    const presets = [{ id: DEVICE, name: 'This device', w: dev[0], h: dev[1] }, ...DEVICE_PRESETS, { id: CUSTOM, name: 'Custom' }];
-    const list = h('div', { class: 'radio-list', role: 'radiogroup', 'aria-label': 'Image size' }, presets.map((p) => h('button', {
-      type: 'button', role: 'radio', class: 'radio-item', 'data-id': p.id, onclick: () => edit((x) => ({ ...x, exportPreset: p.id })),
-    }, h('i', { class: 'radio-dot' }), h('span', { class: 'grow title' }, p.name), p.id === DEVICE ? tag('DETECTED') : null,
-    h('span', { class: 'mono-small' }, p.id === CUSTOM ? 'W × H' : `${p.w} × ${p.h}`))));
-    const num = (label, key) => textField(label, String(c[key]), (s) => {
-      const v = parseInt(s.replace(/\D/g, ''), 10);
-      if (v) edit((x) => ({ ...x, [key]: v }));
-    }, { mono: true, max: 4, inputmode: 'numeric', supporting: '200–8192' });
-    const custom = h('div', { class: 'row' }, num('Width px', 'customW'), num('Height px', 'customH'));
+    const kind = segmented([false, true], c.dual, (v) => (v ? 'Dual · lock + home' : 'Single · with card'), (v) => edit((x) => ({ ...x, dual: v })));
+    const homeOv = switchRow('Overlay on home', 'Keep the overlay without the card', c.homeOverlay, (v) => { if (draft().overlay !== 'NONE') edit((x) => ({ ...x, homeOverlay: v })); else paintHomeOv(draft()); });
+    const dualBox = h('div', { class: 'stack' }, h('p', { class: 'body muted' }, 'Lock screen gets the card, home screen the backdrop alone.'), homeOv);
     const scale = segmented([1, 2, 3], c.exportScale, (v) => `${v}×`, (v) => edit((x) => ({ ...x, exportScale: v })));
     const fmt = segmented([true, false], c.exportPng, (v) => (v ? 'PNG' : 'JPG'), (v) => edit((x) => ({ ...x, exportPng: v })));
     const out = h('span', { class: 'mono-small' }), cardOut = h('span', { class: 'mono-small' }), bar = h('span', { class: 'mono-small' }), place = h('span', { class: 'mono-small' });
     const placeKey = h('span', { class: 'mono-small muted grow' });
     const capNote = h('p', { class: 'note', hidden: true });
+    const setNote = h('p', { class: 'note' });
     const line = (k, v) => h('div', { class: 'readout-line' }, h('span', { class: 'mono-small muted grow' }, k), v);
     const placeLine = h('div', { class: 'readout-line' }, placeKey, place);
-    const el = h('div', { class: 'stack' }, sectionLabel('Size'), list, custom,
+    const el = h('div', { class: 'stack' }, sectionLabel('Wallpaper'), kind, dualBox,
       sectionLabel('Quality · saved image', 'mt'), h('div', { class: 'row' }, scale, fmt),
-      h('div', { class: 'panel-box' }, line('OUTPUT', out), line('CARD', cardOut), placeLine, line('BARCODE BAR', bar), capNote,
-        h('p', { class: 'note' }, 'Browsers can’t change the wallpaper themselves: “Set as wallpaper” saves the image and shows the steps for this device.')));
+      h('div', { class: 'panel-box' }, line('OUTPUT', out), line('CARD', cardOut), placeLine, line('BARCODE BAR', bar), capNote, setNote));
+
+    function paintHomeOv(x) {
+      const none = x.overlay === 'NONE';
+      homeOv.setAttribute('aria-checked', String(x.homeOverlay && !none));
+      homeOv.querySelector('.sub').textContent = none ? 'No overlay chosen on the Backdrop tab' : `Keep the ${OVERLAYS[x.overlay].toLowerCase()} overlay without the card`;
+      homeOv.disabled = none;
+    }
 
     function update(x) {
-      list.querySelectorAll('.radio-item').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.id === x.exportPreset)));
-      custom.hidden = x.exportPreset !== CUSTOM;
+      kind.set(x.dual);
+      dualBox.hidden = !x.dual;
+      paintHomeOv(x);
       const [tw, th] = targetSize(x);
       const o = exportSize(tw, th, x.exportScale);
-      out.textContent = `${o.w} × ${o.h} PX`;
+      out.textContent = `${o.w} × ${o.h} PX${x.dual ? ' · 2 IMAGES' : ''}`;
+      // The card is laid out on the closed-screen strip of a foldable's open picture.
+      const [bw, bh] = cardArea(foldFor(x), o.w, o.h);
       const [uw, uh] = unitSize(x);
-      const cp = cardPx(x, o.w, o.h);
+      const cp = cardPx(x, bw, bh);
       cardOut.textContent = `${Math.round(cp)} × ${Math.round(cp * uh / uw)} PX`;
       // The narrowest barcode bar in the output is the first thing to fail when scanning.
       const modulePx = (uw - 32) * (cp / uw) / barcode(x.barcodeLink).modules;
@@ -558,16 +622,66 @@ export function builderScreen(nav) {
       const gs = guides();
       placeLine.hidden = !gs;
       if (gs) {
-        const g = guideScreen(gs), ov = cardOverlaps(x, o.w, o.h, gs);
+        const g = guideScreen(gs), ov = cardOverlaps(x, bw, bh, gs);
         placeKey.textContent = `${g.short} · ${g.top.toUpperCase()} · ${g.bottom.toUpperCase()}`;
         place.textContent = !overlapsAny(ov) ? 'CLEAR' : ov.clock && ov.dock ? 'UNDER BOTH' : ov.clock ? `UNDER ${g.top.toUpperCase()}` : `UNDER ${g.bottom.toUpperCase()}`;
         place.classList.toggle('lime', !overlapsAny(ov)); place.classList.toggle('orange', overlapsAny(ov));
       }
       capNote.hidden = !o.capped;
       capNote.textContent = `Scaled down to ${(MAX_PIXELS / 1e6).toFixed(0)} MP, the most this browser can draw in one image.`;
+      setNote.textContent = activeFold()
+        ? `Browsers can’t change the wallpaper themselves: “Set as wallpaper” saves one picture for both screens of this foldable (the open screen shows all of it, the closed one the part outlined in the Open preview) and shows the steps.`
+        : `Browsers can’t change the wallpaper themselves: “${x.dual ? 'Set wallpapers' : 'Set as wallpaper'}” saves ${x.dual ? 'the two images' : 'the image'} at this screen’s size and shows the steps for this device.`;
     }
     update(c);
     return { el, update };
+  }
+
+  /** Name of a resolution preset, as the Backdrop row and the dialog show it. */
+  function presetName(id) {
+    const f = activeFold();
+    if (id === DEVICE) return f ? 'This device · closed screen' : 'This device';
+    if (id === FOLD) return f ? 'This foldable · open + closed' : 'This device';
+    if (id === CUSTOM) return 'Custom';
+    return DEVICE_PRESETS.find((p) => p.id === id)?.name || 'This device';
+  }
+
+  /** Backdrop › Resolution: the size the wallpaper is designed and saved at. */
+  function resolutionDialog() {
+    const c = draft(), f = activeFold();
+    const presets = [{ id: DEVICE, name: f ? 'This device · closed screen' : 'This device · full screen', w: dev[0], h: dev[1] },
+      ...(f ? [{ id: FOLD, name: 'This foldable · open + closed', w: f.openW, h: f.openH }] : []), ...DEVICE_PRESETS, { id: CUSTOM, name: 'Custom' }];
+    let sel = presets.some((p) => p.id === c.exportPreset) ? c.exportPreset : DEVICE;
+    let cw = String(c.customW), chh = String(c.customH);
+    const valid = (v) => /^\d+$/.test(v) && +v >= 200 && +v <= 8192;
+    const list = h('div', { class: 'radio-list', role: 'radiogroup', 'aria-label': 'Resolution' }, presets.map((p) => h('button', {
+      type: 'button', role: 'radio', class: 'radio-item', 'data-id': p.id, onclick: () => { sel = p.id; paint(); },
+    }, h('i', { class: 'radio-dot' }), h('span', { class: 'grow title' }, p.name), p.id === DEVICE ? tag('DETECTED') : null,
+    h('span', { class: 'mono-small' }, p.id === CUSTOM ? 'W × H' : `${p.w} × ${p.h}`))));
+    const num = (label, v, set) => textField(label, v, (s) => { set(s.replace(/\D/g, '')); paint(); }, { mono: true, max: 4, inputmode: 'numeric', supporting: '200–8192' });
+    const wf = num('Width px', cw, (v) => { cw = v; }), hf = num('Height px', chh, (v) => { chh = v; });
+    const custom = h('div', { class: 'row' }, wf, hf);
+    const apply = h('button', { type: 'button', class: 'text-btn lime', onclick: () => {
+      if (sel === CUSTOM && !(valid(cw) && valid(chh))) return;
+      edit((x) => ({ ...x, exportPreset: sel, ...(sel === CUSTOM ? { customW: +cw, customH: +chh } : {}) }));
+      sheet.close();
+    } }, 'Apply');
+    function paint() {
+      list.querySelectorAll('.radio-item').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.id === sel)));
+      custom.hidden = sel !== CUSTOM;
+      const ok = sel !== CUSTOM || (valid(cw) && valid(chh));
+      wf.setSupporting('200–8192', !valid(cw)); hf.setSupporting('200–8192', !valid(chh));
+      apply.disabled = !ok;
+    }
+    const sheet = openSheet([
+      h('h2', { class: 'sheet-title' }, 'Resolution'), list, custom,
+      h('p', { class: 'body muted' }, f
+        ? '“Set as wallpaper” always makes the open + closed picture for this phone; the size here is for saved images and the preview.'
+        : '“Set as wallpaper” always uses this device’s screen; other sizes are for saved images.'),
+      h('div', { class: 'dialog-actions' }, h('button', { type: 'button', class: 'text-btn', onclick: () => sheet.close() }, 'Cancel'), apply),
+    ], { label: 'Resolution', dialog: true });
+    sheet.el.classList.add('res-dialog');
+    paint();
   }
 
   // ── Sheets ──
@@ -575,7 +689,10 @@ export function builderScreen(nav) {
   function openAddRow(header, after = null) { nav.openAddRow(header, after); }
 
   function fullPreview() {
-    const cv = wallpaperCanvas(draft, () => S.photo, () => dev, 'full-wall');
+    // This screen as it will look: on a foldable the view the stage shows (closed unless toggled).
+    const f = activeFold();
+    const fv = f ? [f, stageFold()?.[1] || 'CLOSED'] : null;
+    const cv = wallpaperCanvas(draft, () => S.photo, () => (fv ? foldSize(fv[0], fv[1]) : dev), 'full-wall', { fold: () => fv });
     const zoomHint = h('p', { class: 'zoom-hint mono-small' }, 'PINCH OR DOUBLE-TAP TO ZOOM · TAP TO CLOSE');
     let zoom = null;
     const s = openSheet([cv, zoomHint], { label: 'Wallpaper preview', dialog: true, onClose: () => { zoom?.dispose(); cv.dispose(); } });
@@ -584,39 +701,66 @@ export function builderScreen(nav) {
     zoom = zoomPan(s.el, cv.canvas, { onTap: () => s.close() });
   }
 
+  /**
+   * Save image (the card's size) or Set as wallpaper (this screen; a foldable's open picture).
+   * Dual cards make two images, one at a time so only one big canvas is alive: the lock screen's
+   * with the card, then the home screen's backdrop alone.
+   */
   async function saveImage(wallpaper) {
     const c = draft();
     await flush();
-    busy(wallpaper ? 'Rendering wallpaper…' : 'Rendering image…');
+    const dual = c.dual;
+    busy(wallpaper ? (dual ? 'Rendering wallpapers…' : 'Rendering wallpaper…') : (dual ? 'Rendering images…' : 'Rendering image…'));
     await nextPaint();
-    let res;
+    const size = wallpaper ? exportSize(...wallpaperSize(), 1) : exportSize(...targetSize(c), c.exportScale);
+    const fold = wallpaper ? wallpaperFold() : foldFor(c);
+    const t = Date.now();
+    const files = [];
     try {
-      // "Set as wallpaper" always uses this screen's exact size, like the Android app.
-      const size = wallpaper ? exportSize(dev[0], dev[1], 1) : exportSize(...targetSize(c), c.exportScale);
-      res = await renderImage(c, S.photo, size);
+      const lock = await renderImage(c, S.photo, size, { fold });
+      files.push({ ...lock, file: new File([lock.blob], fileName(c, dual ? 'lock' : '', t), { type: lock.blob.type }), cap: 'LOCK' });
+      if (dual) {
+        const home = await renderImage(homeOnly(c), S.photo, size, { fold, card: false });
+        files.push({ ...home, file: new File([home.blob], fileName(c, 'home', t), { type: home.blob.type }), cap: 'HOME' });
+      }
     } catch (e) { console.warn(e); busy(null); toast('Couldn’t render the image'); return; }
     busy(null);
-    const file = new File([res.blob], fileName(c), { type: res.blob.type });
-    // Desktop and Android save straight to Downloads; iOS goes through the share sheet.
-    if (!wallpaper && !isIos) { download(res.blob, file.name); toast(isAndroid() ? 'Saved to Downloads' : 'Image saved'); return; }
-    imageReady(file, res, wallpaper);
+    // Desktop and Android save one image straight to Downloads; iOS goes through the share sheet,
+    // and a pair gets a sheet so each download is its own tap (browsers block a second one).
+    if (!wallpaper && !isIos && !dual) { download(files[0].blob, files[0].file.name); toast(isAndroid() ? 'Saved to Downloads' : 'Image saved'); return; }
+    imageReady(files, wallpaper, { dual, fold: !!(wallpaper ? fold : null) });
   }
 
-  function imageReady(file, res, wallpaper) {
-    const url = URL.createObjectURL(file);
-    const share = canShareFile(file);
-    const saveBtn = isIos && share
-      ? primary('Save to Photos', async () => { const r = await shareFile(file); if (r === 'failed') download(file, file.name); })
-      : primary('Save image', () => { download(file, file.name); toast(isAndroid() ? 'Saved to Downloads' : 'Image saved'); }, { icon: I.download });
+  function imageReady(items, wallpaper, opts) {
+    const files = items.map((x) => x.file);
+    const urls = files.map((f) => URL.createObjectURL(f));
+    const share = canShareFiles(files);
+    const pair = items.length > 1;
+    const saved = () => toast(isAndroid() ? 'Saved to Downloads' : 'Image saved');
+    const saveOne = (x, label) => outline(label, () => { download(x.file, x.file.name); saved(); }, { icon: I.download });
+    const buttons = isIos && share
+      ? [primary(pair ? 'Save both to Photos' : 'Save to Photos', async () => { const r = await shareFiles(files); if (r === 'failed') files.forEach((f) => download(f, f.name)); }),
+        ...(pair ? items.map((x) => saveOne(x, `Save ${x.cap.toLowerCase()} image to Files`)) : [outline('Save to Files', () => download(files[0], files[0].name), { icon: I.download })])]
+      : pair
+        ? [...items.map((x, i) => (i === 0 ? primary : outline)(`Save ${x.cap.toLowerCase()} image`, () => { download(x.file, x.file.name); saved(); }, { icon: I.download })),
+          share ? outline('Share both…', () => shareFiles(files), { icon: I.share }) : null]
+        : [primary('Save image', () => { download(files[0], files[0].name); saved(); }, { icon: I.download }), share ? outline('Share…', () => shareFiles(files), { icon: I.share }) : null];
+    const first = items[0];
+    const info = `${first.w} × ${first.h} PX · ${first.file.type === 'image/png' ? 'PNG' : 'JPG'} · ${(items.reduce((n, x) => n + x.file.size, 0) / 1048576).toFixed(1)} MB${pair ? ' · 2 IMAGES' : ''}`;
+    const title = wallpaper ? (pair ? 'Set dual wallpaper' : 'Set as wallpaper') : (pair ? 'Images ready' : 'Image ready');
+    const pics = pair
+      ? h('div', { class: 'ready-pair' }, items.map((x, i) => h('figure', {}, h('img', { src: urls[i], alt: `${x.cap === 'LOCK' ? 'Lock screen, with the card' : 'Home screen, backdrop alone'}`, class: 'ready-img' }), h('figcaption', {}, x.cap))))
+      : h('img', { src: urls[0], alt: 'Rendered wallpaper', class: 'ready-img' });
+    const text = wallpaper
+      ? h('ol', { class: 'steps' }, wallpaperSteps(opts).map((t) => h('li', {}, t)))
+      : h('p', { class: 'body muted' }, isIos ? (pair ? 'Tap Save both to Photos, then choose “Save 2 Images”.' : 'Tap Save to Photos, then choose “Save Image”. You can also press and hold the picture.')
+        : pair ? 'The _lock image has the card, the _home image the backdrop alone.' : '');
     openSheet([
-      h('h2', { class: 'sheet-title' }, wallpaper ? 'Set as wallpaper' : 'Image ready'),
-      h('div', { class: 'ready' }, h('img', { src: url, alt: 'Rendered wallpaper', class: 'ready-img' }),
-        h('div', { class: 'ready-info' }, h('p', { class: 'mono-small' }, `${res.w} × ${res.h} PX · ${file.type === 'image/png' ? 'PNG' : 'JPG'} · ${(file.size / 1048576).toFixed(1)} MB`),
-          wallpaper ? h('ol', { class: 'steps' }, wallpaperSteps().map((t) => h('li', {}, t))) : h('p', { class: 'body muted' }, isIos ? 'Tap Save to Photos, then choose “Save Image”. You can also press and hold the picture.' : ''))),
-      saveBtn,
-      share && !isIos ? outline('Share…', () => shareFile(file), { icon: I.share }) : null,
-      isIos && share ? outline('Save to Files', () => download(file, file.name), { icon: I.download }) : null,
-    ], { label: wallpaper ? 'Set as wallpaper' : 'Image ready', onClose: () => setTimeout(() => URL.revokeObjectURL(url), 1000) });
+      h('h2', { class: 'sheet-title' }, title),
+      wallpaper && pair ? h('p', { class: 'body' }, 'Dual wallpaper is on for this card: the lock screen gets the card, the home screen the backdrop alone. To use the card on both screens this time, set the _lock image on both.') : null,
+      h('div', { class: 'ready' }, pics, h('div', { class: 'ready-info' }, h('p', { class: 'mono-small' }, info), text)),
+      ...buttons,
+    ], { label: title, onClose: () => setTimeout(() => urls.forEach((u) => URL.revokeObjectURL(u)), 1000) });
   }
 
   const isAndroid = () => /android/i.test(navigator.userAgent);
@@ -626,11 +770,14 @@ export function builderScreen(nav) {
     else if (k === 'sel' && editApi) refresh();
     else if (k === 'undo') paintHistory();
   });
+  // A foldable seen on its other screen for the first time, or the layout switched: new sizes.
+  const unsubFold = onFoldChange(() => { dev = deviceSize(); refresh(); });
   // Settings changed (here or in another place): the layout switch, the guides.
   const unsubSettings = onSettings(() => {
+    dev = deviceSize();
     if ((tab === 0) && !!editApi !== cardMode()) setTab(0, true);
     else refresh();
-    if (tab >= 2) wall.sync();
+    if (tab >= 2) { wall.sync(); wallHome.sync(); }
   });
   paintTabsHidden();
   paintHistory();
@@ -645,7 +792,7 @@ export function builderScreen(nav) {
       if (key === 's') { saveImage(false); return true; }
       return false;
     },
-    destroy() { exiting = true; clearHistory(); unsub(); unsubSettings(); paneApi?.destroy?.(); editApi?.destroy(); card.dispose(); wall.dispose(); },
+    destroy() { exiting = true; clearHistory(); unsub(); unsubSettings(); unsubFold(); paneApi?.destroy?.(); editApi?.destroy(); card.dispose(); wall.dispose(); wallHome.dispose(); },
   };
 }
 

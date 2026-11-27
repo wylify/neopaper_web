@@ -1,5 +1,5 @@
 // App preferences (data/SettingsRepository.kt), kept in localStorage: a handful of small values.
-import { DEVICE, DEVICE_PRESETS, RATIOS } from './model.js';
+import { DEVICE, FOLD, DEVICE_PRESETS, RATIOS } from './model.js';
 import { isSmallSquarish, GUIDE_SCREENS } from './placement.js';
 
 const KEY = 'neopaper.settings';
@@ -16,6 +16,8 @@ const DEFAULTS = {
   /** The builder's tab bar stays folded away between visits. */
   tabsHidden: false,
   cardEditor: 'CARD',
+  /** Foldables: wallpapers for both screens, the closed-screen wallpaper at the centre. Per device. */
+  foldLayout: true,
 };
 
 function load() {
@@ -29,11 +31,11 @@ export function validSettings(o) {
   const s = {};
   if (o.ratio in RATIOS) s.ratio = o.ratio;
   if (o.orientation in ORIENTATIONS) s.orientation = o.orientation;
-  if (o.exportPreset === DEVICE || DEVICE_PRESETS.some((p) => p.id === o.exportPreset)) s.exportPreset = o.exportPreset;
+  if (o.exportPreset === DEVICE || o.exportPreset === FOLD || DEVICE_PRESETS.some((p) => p.id === o.exportPreset)) s.exportPreset = o.exportPreset;
   if ([1, 2, 3].includes(o.exportScale)) s.exportScale = o.exportScale;
   if (o.guideScreen in GUIDE_SCREENS) s.guideScreen = o.guideScreen;
   if (o.cardEditor in CARD_EDITORS) s.cardEditor = o.cardEditor;
-  for (const k of ['exportPng', 'guidesOn', 'haptics', 'tabsHidden']) if (typeof o[k] === 'boolean') s[k] = o[k];
+  for (const k of ['exportPng', 'guidesOn', 'haptics', 'tabsHidden', 'foldLayout']) if (typeof o[k] === 'boolean') s[k] = o[k];
   return s;
 }
 

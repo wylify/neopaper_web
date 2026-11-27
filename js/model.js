@@ -78,6 +78,8 @@ export const QR_TYPES = { FIELDS: 'Fields', CONTACT: 'vCard', LINK: 'Link', TEXT
 export const BG_MODES = ['COLOR', 'PHOTO'];
 export const PHOTO_EFFECTS = { NONE: 'None', MONO: 'Mono', BLUR: 'Blur' };
 export const OVERLAYS = { NONE: 'None', SCANLINES: 'Scan', GRID: 'Grid', DOTS: 'Dots', HUD: 'HUD' };
+/** Photo framing zoom, over the fill-the-screen size. */
+export const PHOTO_ZOOM_RANGE = [1, 5];
 
 /** NEOSCAN, the installable web reader for these cards. */
 export const READER_LINK = 'wylify.github.io/neoscan';
@@ -121,6 +123,8 @@ export const defaultRows = () => ['owner', 'contact', 'hazard', 'checks', 'date'
 
 export const DEVICE = 'device';
 export const CUSTOM = 'custom';
+/** A foldable's open-screen picture with the closed screen's wallpaper at its centre. */
+export const FOLD = 'fold';
 export const DEVICE_PRESETS = [
   { id: 'iphone16pro', name: 'iPhone 16 Pro', w: 1206, h: 2622 },
   { id: 'pixel9', name: 'Pixel 9', w: 1080, h: 2424 },
@@ -138,11 +142,22 @@ export function newCard(over = {}) {
     ratio: 'R3_4', landscape: false, corner: 'CUT', cornerMarks: true,
     labelColor: argb(0xFF6A13), ink: argb(0x141414),
     bgMode: 'COLOR', bgColor: argb(0xE7E6E2), photoUri: null, photoDim: 0.25, photoEffect: 'NONE', overlay: 'NONE',
+    // Photo framing: zoom over the fill-the-screen size and where the screen sits in the slack
+    // that leaves, -1 (left/top edge) … 1 (right/bottom edge).
+    photoZoom: 1, photoX: 0, photoY: 0,
     cardSize: 0.74, nudge: 0, tilt: 0, cropMarks: true,
-    exportPreset: DEVICE, customW: 1080, customH: 2400, exportScale: 1, exportPng: true, appliedTo: null, updatedAt: now,
+    exportPreset: DEVICE, customW: 1080, customH: 2400, exportScale: 1, exportPng: true,
+    // Dual wallpaper: the card on the lock screen, the bare backdrop on home (with the overlay or not).
+    dual: false, homeOverlay: true,
+    appliedTo: null, updatedAt: now,
     ...over,
   };
 }
+
+export const photoFramed = (c) => c.photoZoom !== 1 || c.photoX !== 0 || c.photoY !== 0;
+export const resetFraming = (c) => ({ ...c, photoZoom: 1, photoX: 0, photoY: 0 });
+/** The card-less home half of a dual pair. */
+export const homeOnly = (c) => (c.homeOverlay ? c : { ...c, overlay: 'NONE' });
 
 /** Card size in layout units. Every ratio keeps the same area so text size never changes. */
 export function unitSize(cfg) {
@@ -250,9 +265,10 @@ export function toJson(c) {
     labelColor: c.labelColor, ink: c.ink,
     bgMode: c.bgMode, bgColor: c.bgColor, photoUri: c.photoUri ?? null,
     photoDim: c.photoDim, photoEffect: c.photoEffect, overlay: c.overlay,
+    photoZoom: c.photoZoom, photoX: c.photoX, photoY: c.photoY,
     cardSize: c.cardSize, nudge: c.nudge, tilt: c.tilt, cropMarks: c.cropMarks,
     exportPreset: c.exportPreset, customW: c.customW, customH: c.customH,
-    exportScale: c.exportScale, exportPng: c.exportPng, appliedTo: c.appliedTo ?? null, updatedAt: c.updatedAt,
+    exportScale: c.exportScale, exportPng: c.exportPng, dual: c.dual, homeOverlay: c.homeOverlay, appliedTo: c.appliedTo ?? null, updatedAt: c.updatedAt,
   };
 }
 
@@ -304,10 +320,13 @@ export function fromJson(o) {
     photoUri: typeof o?.photoUri === 'string' && o.photoUri ? o.photoUri : null,
     photoDim: clamp(num(o?.photoDim, 0.25), 0, 0.9), photoEffect: pick(o?.photoEffect, Object.keys(PHOTO_EFFECTS), 'NONE'),
     overlay: pick(o?.overlay, Object.keys(OVERLAYS), 'NONE'),
+    photoZoom: clamp(num(o?.photoZoom, 1), PHOTO_ZOOM_RANGE[0], PHOTO_ZOOM_RANGE[1]),
+    photoX: clamp(num(o?.photoX, 0), -1, 1), photoY: clamp(num(o?.photoY, 0), -1, 1),
     cardSize: clamp(num(o?.cardSize, 0.74), 0.3, 0.95), nudge: clamp(num(o?.nudge, 0), -0.25, 0.25), tilt: clamp(num(o?.tilt, 0), -8, 8),
     cropMarks: bool(o?.cropMarks, true),
     exportPreset: str(o?.exportPreset, d.exportPreset), customW: int(o?.customW, d.customW), customH: int(o?.customH, d.customH),
     exportScale: clamp(int(o?.exportScale, 1), 1, 3), exportPng: bool(o?.exportPng, true),
+    dual: bool(o?.dual, false), homeOverlay: bool(o?.homeOverlay, true),
     appliedTo: typeof o?.appliedTo === 'string' && o.appliedTo ? o.appliedTo : null,
     updatedAt: num(o?.updatedAt, d.updatedAt),
   };
